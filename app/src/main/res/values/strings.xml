@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Strings -->
+    <string name="app_name">Quantum</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="skip_silence_on">Skip Silence</string>
+    <string name="skip_silence_off">Skip Silence</string>
+    <string name="skip_silence_desc">Skip silent sections automatically</string>
+    
+    <!-- Playback controls -->
+    <string name="previous">Previous</string>
+    <string name="next">Next</string>
+    <string name="backward_5">10s back</string>
+    <string name="forward_5">10s forward</string>
+    <string name="speed">Speed</string>
+    <string name="subtitle">Subtitle</string>
+    <string name="audio_track">Audio Track</string>
+    <string name="video_quality">Video Quality</string>
+    <string name="aspect_ratio">Aspect Ratio</string>
+    <string name="zoom">Zoom</string>
+    <string name="rotate">Rotate</string>
+    <string name="screenshot">Screenshot</string>
+    <string name="lock_controls">Lock Controls</string>
+    <string name="more_menu">More</string>
+    <string name="open_video">Open Video</string>
+    <string name="url_input">URL</string>
+    <string name="resume">Resume</string>
+    
+    <!-- Error messages -->
+    <string name="error_unsupported_codec">Unsupported codec</string>
+    <string name="error_unsupported_container">Unsupported container</string>
+    <string name="error_network_error">Network error</string>
+    <string name="error_invalid_url">Invalid URL</string>
+    <string name="error_yt_dlp_failed">yt-dlp resolution failed</string>
+    <string name="error_decoder_init">Decoder initialization error</string>
+    <string name="error_drm">DRM/protected stream</string>
+    <string name="error_invalid_hls_playlist">Invalid HLS playlist</string>
+    <string name="error_invalid_dash_manifest">Invalid DASH manifest</string>
+    <string name="error_audio_decoder">Audio decoder failure</string>
+    <string name="error_video_decoder">Video decoder failure</string>
+    
+    <!-- Settings -->
+    <string name="default_speed">Default Speed</string>
+    <string name="decoder_preference">Decoder Preference</string>
+    <string name="hardware_decoding">Hardware</string>
+    <string name="software_decoding">Software</string>
+    <string name="buffer_settings">Buffer Settings</string>
+    <string name="skip_silence_title">Skip Silence</string>
+    <string name="silence_threshold">Silence Threshold</string>
+    <string name="min_silence_duration">Min Silence Duration</string>
+    <string name="seek_interval">Seek Interval</string>
+    <string name="gesture_sensitivity">Gesture Sensitivity</string>
+    <string name="seek_amount">Seek Amount</string>
+    <string name="brightness_gesture">Brightness Gesture</string>
+    <string name="volume_gesture">Volume Gesture</string>
+    <string name="long_press_speed">Long-Press Speed</string>
+    
+    <!-- Subtitles -->
+    <string name="subtitle_size">Size</string>
+    <string name="subtitle_position">Position</string>
+    <string name="subtitle_style">Style</string>
+    <string name="subtitle_delay">Delay</string>
+    <string name="subtitle_color">Color</string>
+    <string name="subtitle_background">Background</string>
+    
+    <!-- Appearance -->
+    <string name="appearance">Appearance</string>
+    <string name="light_mode">Light</string>
+    <string name="dark_mode">Dark</string>
+    <string name="amoled">AMOLED</string>
+    <string name="accent_color">Accent Color</string>
+    
+    <!-- Advanced -->
+    <string name="advanced">Advanced</string>
+    <string name="mpv_options">MPV Options</string>
+    <string name="ffmpeg_options">FFmpeg Options</string>
+    <string name="network_settings">Network Settings</string>
+    <string name="yt_dlp_settings">yt-dlp Settings</string>
+    <string name="debug_logging">Debug Logging</string>
+    
+    <!-- Player information -->
+    <string name="filename">Filename</string>
+    <string name="container">Container</string>
+    <string name="resolution">Resolution</string>
+    <string name="fps">FPS</string>
+    <string name="video_codec">Video Codec</string>
+    <string name="profile">Profile</string>
+    <string name="level">Level</string>
+    <string name="bit_depth">Bit Depth</string>
+    <string name="hdr">HDR</string>
+    <string name="audio_codec">Audio Codec</string>
+    <string name="audio_channels">Audio Channels</string>
+    <string name="audio_sample_rate">Audio Sample Rate</string>
+    <string name="subtitle_tracks">Subtitle Tracks</string>
+    <string name="bitrate">Bitrate</string>
+    <string name="decoder">Decoder</string>
+    <string name="dropped_frames">Dropped Frames</string>
+    <string name="buffer_health">Buffer Health</string>
+    <string name="network_speed">Network Speed</string>
+    
+    <!-- PiP -->
+    <string name="pip_exit">Exit PiP</string>
+    
+    <!-- Skip silence -->
+    <string name="skip_silence_analysis_caching">Analysis Caching</string>
+    <string name="prevent_repeated_skips">Prevent Repeated Skips</string>
+    
+    <!-- Playback -->
+    <string name="playback_resume">Playback Resume</string>
+    <string name="sleep_timer">Sleep Timer</string>
+    
+    <!-- Aspect ratio controls -->
+    <string name="aspect_auto">Auto</string>
+    <string name="aspect_fit">Fit</string>
+    <string name="aspect_fill">Fill</string>
+    <string name="aspect_original">Original</string>
+    
+    <!-- Theme strings -->
+    <string name="material_dark">Material Dark</string>
+    <string name="material_light">Material Light</string>

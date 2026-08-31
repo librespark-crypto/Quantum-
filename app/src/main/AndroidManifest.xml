@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.quantum.player">
+
+    <!-- Storage permissions for file browsing -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    
+    <!-- Network permissions -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    
+    <!-- Hardware acceleration -->
+    <uses-feature android:name "android.hardware.screen.portrait" android:required="false"/>
+    <uses-feature android:name "android.hardware.screen.landscape" android:required="false"/>
+
+    <application
+        android:name=".player.QuantumApplication"
+        android android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Quantum.NoActionBar">
+
+        <!-- Activity for fullscreen playback -->
+        <activity
+            android:name=".player.QuantumPlayerActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:configChanges="orientation|screenSize|smallestScreenSize|fontScale|keyboard|keyboardHidden|navigation"
+            android:hardwareAccelerated="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- PiP Activity -->
+        <activity
+            android:name=".pip.QuantumPiPActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Quantum.Pip"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:resizeableActivity="true">
+            <meta-data
+                android:name="androidx.activity.enablePiP"
+                android:value="true"/>
+        </activity>
+
+        <!-- Background playback service -->
+        <service
+            android:name=".service.QuantumBackgroundService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:permission="android.permission.BIND_SERVICE">
+            <intent-filter>
+                <action android:name="com.quantum.player.service.QuantumBackgroundService"/>
+            </intent-filter>
+        </service>
+
+        <meta-data
+            android:name="com.google.android.gms.smartdevice"
+            android:value="required"/>
+    </application>
+
+</manifest>
