@@ -151,8 +151,8 @@ Single consistent JVM target: **AGP 8.3.0 ↔ Gradle 8.4 ↔ JDK 17 ↔ Kotlin 1
 
 ## 4. Files changed
 
-67 changed or new paths vs `244b5d8`: 31 tracked files modified or deleted (+4,459 / −2,902 lines
-on tracked files) plus 36 new files. 32 main Kotlin files (6,722 lines), 5 test files (1,340 lines, **101 `@Test` methods**).
+**68 paths** vs `244b5d8` — 30 modified, 1 deleted, 37 added; **+7,730 / −2,902 lines** (matches
+what GitHub reports for the pull request). 32 main Kotlin files (6,722 lines), 5 test files (1,340 lines, **101 `@Test` methods**).
 
 Deleted: `database/QuantumDatabase.kt` (duplicate `@Database`).
 Recovered from `codeload.github.com/gradle/gradle` tag `v8.4.0`: `gradle-wrapper.jar` (63,721 B,
