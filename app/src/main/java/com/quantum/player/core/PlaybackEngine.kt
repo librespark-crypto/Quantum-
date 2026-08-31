@@ -1,110 +1,164 @@
 package com.quantum.player.core
 
+import android.view.SurfaceView
+import android.view.TextureView
 import com.quantum.player.model.MediaItem
-import com.quantum.player.model.PlaybackState
 import kotlinx.coroutines.flow.Flow
 
 /**
  * Interface defining the playback engine abstraction.
+ *
  * This allows switching between Media3/ExoPlayer, libmpv, or yt-dlp backends
- * without rewriting the UI.
+ * without rewriting the UI. Nothing above this interface may reference a
+ * concrete backend type (`androidx.media3.*`, `libmpv`): the layers are
+ *
+ *     UI -> ViewModel -> PlaybackEngine -> concrete backend
+ *
+ * Video output is attached through plain `android.view` types rather than a
+ * player view, which keeps the abstraction honest for non-Media3 backends.
  */
-public interface PlaybackEngine {
+interface PlaybackEngine {
 
-    /** Start playback of a media item */
+    /** Start playback of a media item. */
     suspend fun play(mediaItem: MediaItem): PlaybackSession
 
-    /** Pause playback */
+    /** Pause playback. */
     suspend fun pause()
 
-    /** Resume playback */
+    /** Resume playback. */
     suspend fun resume()
 
-    /** Stop playback and release resources */
+    /** Stop playback and release resources. */
     suspend fun stop()
 
-    /** Get current playback state as a Flow */
+    /** Current playback state. */
     val stateFlow: Flow<PlaybackState>
 
-    /** Get current position in milliseconds */
+    /** Current playback position in milliseconds, observed. */
+    val positionFlow: Flow<Long>
+
+    /**
+     * Structured error for the current/last failure, or null when playback is
+     * healthy. Carries a user facing message plus a suggested solution so the
+     * UI never has to guess what went wrong.
+     */
+    val errorFlow: Flow<com.quantum.player.error.PlaybackError.PlaybackException?>
+
+    /** Get current position in milliseconds. */
     val currentPosition: Long
 
-    /** Get duration in milliseconds, or -1 if unknown */
+    /** Get duration in milliseconds, or -1 if unknown. */
     val duration: Long
 
-    /** Seek to a position in milliseconds */
+    /** Buffered position in milliseconds, or -1 if unknown. */
+    val bufferedPosition: Long
+
+    /** Seek to a position in milliseconds. */
     suspend fun seekTo(positionMs: Long)
 
-    /** Set playback speed (0.25x to 4.0x) */
+    /** Relative seek; negative values seek backwards. */
+    suspend fun seekBy(deltaMs: Long)
+
+    /** Set playback speed (0.25x to 4.0x). */
     suspend fun setPlaybackSpeed(speed: Float)
 
-    /** Get current playback speed */
+    /** Get current playback speed. */
     val playbackSpeed: Float
 
-    /** Toggle play/pause */
+    /** Toggle play/pause. */
     suspend fun togglePlayPause()
 
-    /** Get current timestamp */
+    /** Get current timestamp. */
     val currentTimeMs: Long
 
-    /** Check if currently playing */
+    /** Check if currently playing. */
     val isPlaying: Boolean
 
-    /** Check if playback is stopped */
+    /** Check if playback is stopped. */
     val isStopped: Boolean
 
-    /** Check if playback is buffering */
+    /** Check if playback is buffering. */
     val isBuffering: Boolean
 
-    /** Get error information if any */
+    /** Get error information if any. */
     val error: String?
 
-    /** Get current audio track index */
+    /** Retry the media item that last failed. Returns false if there is nothing to retry. */
+    suspend fun retry(): Boolean
+
+    /** Get current audio track index. */
     val currentAudioTrack: Int
 
-    /** Set audio track index */
+    /** Set audio track index. */
     suspend fun setAudioTrack(index: Int)
 
-    /** Get available audio tracks */
+    /** Get available audio tracks. */
     val availableAudioTracks: List<AudioTrackInfo>
 
-    /** Get current subtitle track index */
+    /** Get current subtitle track index. */
     val currentSubtitleTrack: Int
 
-    /** Set subtitle track index */
+    /** Set subtitle track index. */
     suspend fun setSubtitleTrack(index: Int)
 
-    /** Get available subtitle tracks */
+    /** Get available subtitle tracks. */
     val availableSubtitleTracks: List<SubtitleTrackInfo>
 
-    /** Toggle subtitle on/off */
+    /** Get available video tracks. */
+    val availableVideoTracks: List<VideoTrackInfo>
+
+    /** Set video track index. */
+    suspend fun setVideoTrack(index: Int)
+
+    /** Toggle subtitle on/off. */
     suspend fun toggleSubtitle()
 
-    /** Get video width */
+    /** Get video width. */
     val videoWidth: Int
 
-    /** Get video height */
+    /** Get video height. */
     val videoHeight: Int
 
-    /** Get video aspect ratio */
+    /** Get video aspect ratio. */
     val videoAspectRatio: Float
 
-    /** Check if video is valid */
+    /** Check if video is valid. */
     val isVideoValid: Boolean
 
-    /** Request screenshot */
+    /** Request a screenshot of the current frame as PNG bytes. */
     suspend fun captureScreenshot(): ByteArray
 
-    /** Get playback resume position */
+    /** Get playback resume position. */
     val resumePosition: Long
 
-    /** Set playback resume position */
+    /** Set the position playback should start from. */
     suspend fun setResumePosition(position: Long)
 
-    /** Get supported codecs/decoders information */
+    /** Get supported codecs/decoders information. */
     val decoderInfo: DecoderInfo
 
-    /** Release engine resources */
+    /**
+     * Attach the surface that video frames are rendered to. Pass null to detach.
+     * Exactly one of the two may be attached at a time.
+     */
+    fun setVideoSurfaceView(surfaceView: SurfaceView?)
+
+    /** Attach a [TextureView] output; required for [captureScreenshot]. */
+    fun setVideoTextureView(textureView: TextureView?)
+
+    /**
+     * The text of the subtitle cues that are active right now, in rendering
+     * order. Published as plain strings so the UI renders them with the app's
+     * own subtitle styling, and so a non-Media3 backend can publish the same
+     * shape.
+     *
+     * Media3 1.3.x exposes no per-cue timestamps to the app (`Cue` carries no
+     * timing and there is no public `addTextOutput`), so cue windows are not
+     * available here - only the currently visible text is.
+     */
+    val cuesFlow: Flow<List<String>>
+
+    /** Release engine resources. */
     suspend fun release()
 }
 
@@ -142,7 +196,9 @@ data class AudioTrackInfo(
     val codec: String,
     val channels: Int,
     val sampleRate: Int,
-    val bitrate: Long?
+    val bitrate: Long?,
+    /** True for an audio-description (accessibility) rendition of the programme. */
+    val isAudioDescription: Boolean = false
 )
 
 /**
@@ -168,31 +224,3 @@ enum class PlaybackState {
     Error,
     Ended
 }
-
-/**
- * Media item representation.
- */
-data class MediaItem(
-    val id: String,
-    val uri: String,
-    val title: String?,
-    val artist: String?,
-    val album: String?,
-    val artworkUri: String?,
-    val durationMs: Long,
-    val container: String?,
-    val videoCodec: String?,
-    val audioCodec: String?,
-    val subtitles: List<SubtitleInfo>? = null,
-    val metadata: Map<String, Any?> = emptyMap()
-)
-
-/**
- * Subtitle information.
- */
-data class SubtitleInfo(
-    val uri: String,
-    val language: String,
-    val format: String,
-    val defaultTrack: Boolean = false
-)

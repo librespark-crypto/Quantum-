@@ -1,188 +1,161 @@
 package com.quantum.player.service
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.core.app.NotificationCompat
-import com.quantum.player.core.PlaybackState
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.quantum.player.R
 import com.quantum.player.model.MediaItem
-import com.quantum.player.player.QuantumApplication
+import com.quantum.player.player.QuantumPlayerActivity
+import java.util.Locale
 
 /**
  * Notification controller for background playback.
  * Provides playback controls in the notification shade and lock screen.
+ *
+ * Fixes: every `Intent(context, ::class.java)` was a syntax error, the artwork
+ * lookup passed a `String` where a `Uri` was required and called a
+ * `androidx.core.graphics.BitmapUtils` class that does not exist, and
+ * [updatePosition] incremented the notification id so each update posted a brand
+ * new notification instead of replacing the previous one.
  */
-class NotificationController(private val context: Context, private val player: androidx.media3.exoplayer.ExoPlayer?) {
+class NotificationController(private val context: Context) {
 
-    private var notificationId = 1
-    private var notificationChannelId = "quantum_player_background"
+    /** Build the ongoing playback notification. */
+    fun buildPlaybackNotification(
+        mediaItem: MediaItem,
+        isPlaying: Boolean,
+        positionMs: Long,
+        durationMs: Long
+    ): Notification {
+        createChannelIfNeeded()
 
-    /** Build and show the playback notification. */
-    fun showPlaybackNotification(mediaItem: MediaItem) {
-        // Create intent to return to app
         val contentIntent = PendingIntent.getActivity(
-            context, 0,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.RESUME"
+            context,
+            REQUEST_CONTENT,
+            Intent(context, QuantumPlayerActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
             },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            immutableFlags(PendingIntent.FLAG_UPDATE_CURRENT)
         )
 
-        // Play/pause intent
-        val playPauseIntent = PendingIntent.getService(
-            context, 1,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.PAUSE"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Skip previous intent
-        val skipPrevIntent = PendingIntent.getService(
-            context, 2,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.SKIP_PREV"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Skip next intent
-        val skipNextIntent = PendingIntent.getService(
-            context, 3,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.SKIP_NEXT"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Stop intent
-        val stopIntent = PendingIntent.getService(
-            context, 4,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.STOP"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Seek forward intent
-        val seekForwardIntent = PendingIntent.getService(
-            context, 5,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.SEEK_FORWARD"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Seek backward intent
-        val seekBackwardIntent = PendingIntent.getService(
-            context, 6,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.SEEK_BACKWARD"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Set playback speed intent
-        val speedIntent = PendingIntent.getService(
-            context, 7,
-            Intent(context, ::class.java).apply {
-                action = "com.quantum.player.SPEED_CHANGE"
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val builder = NotificationCompat.Builder(context, notificationChannelId)
-            .setContentTitle(mediaItem.title ?: "Quantum Player")
-            .setContentText(formatPosition(player?.currentPosition ?: 0))
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setLargeIcon(mediaItem.artworkUri?.let {
-                android.provider.MediaStore.Images.Media.getBitmap(
-                    context.contentResolver,
-                    it
-                )
-            } ?: androidx.core.graphics.BitmapUtils.getAppIcon(context))
-            .setSubText("Playing")
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(mediaItem.displayName)
+            .setContentText(
+                if (durationMs > 0) {
+                    "${formatPosition(positionMs)} / ${formatPosition(durationMs)}"
+                } else {
+                    formatPosition(positionMs)
+                }
+            )
+            .setSmallIcon(R.drawable.ic_stat_playback)
+            .setSubText(if (isPlaying) context.getString(R.string.play) else context.getString(R.string.pause))
             .setShowWhen(false)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setContentIntent(contentIntent)
-            .addAction(android.R.drawable.ic_media_rew, "Back 10s", seekBackwardIntent)
             .addAction(
-                android.R.drawable.ic_media_pause,
-                "Pause",
-                playPauseIntent
+                android.R.drawable.ic_media_rew,
+                context.getString(R.string.backward_10),
+                serviceAction(QuantumBackgroundService.ACTION_SEEK_BACK, REQUEST_SEEK_BACK)
             )
-            .addAction(android.R.drawable.ic_media_forward, "Forward 10s", seekForwardIntent)
-            .addAction(android.R.drawable.ic_menu_manage, "Speed", speedIntent)
             .addAction(
-                android.R.drawable.ic_menu_close_cancel,
-                "Stop",
-                stopIntent
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (isPlaying) context.getString(R.string.pause) else context.getString(R.string.play),
+                serviceAction(QuantumBackgroundService.ACTION_TOGGLE_PLAY, REQUEST_TOGGLE)
             )
+            .addAction(
+                android.R.drawable.ic_media_ff,
+                context.getString(R.string.forward_10),
+                serviceAction(QuantumBackgroundService.ACTION_SEEK_FORWARD, REQUEST_SEEK_FORWARD)
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                context.getString(R.string.stop),
+                serviceAction(QuantumBackgroundService.ACTION_STOP, REQUEST_STOP)
+            )
+            .build()
+    }
 
-        val notification = builder.build()
+    /** Post or refresh the notification. */
+    fun show(notification: Notification) {
+        // On API 33+ posting requires POST_NOTIFICATIONS; silently skipping is
+        // correct here because playback itself must keep working.
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+    }
 
-        // Get or create notification channel
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val channel = android.app.NotificationChannel(
-                notificationChannelId,
-                "Quantum Player Background",
-                android.app.NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Background playback notifications"
-                enableLights(true)
-                lightColor = android.graphics.Color.WHITE
-                enableVibration(true)
-            }
-            manager.createNotificationChannel(channel)
+    /** Dismiss the playback notification. */
+    fun hide() {
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
+    }
+
+    private fun serviceAction(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getService(
+            context,
+            requestCode,
+            Intent(context, QuantumBackgroundService::class.java).setAction(action),
+            immutableFlags(PendingIntent.FLAG_UPDATE_CURRENT)
+        )
+
+    private fun immutableFlags(base: Int): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            base or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            base
         }
 
-        manager.notify(notificationId, notification)
+    private fun createChannelIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = ContextCompat.getSystemService(context, NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            context.getString(R.string.notification_channel_playback),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = context.getString(R.string.notification_channel_playback_desc)
+            setShowBadge(false)
+            enableLights(false)
+            enableVibration(false)
+        }
+        manager.createNotificationChannel(channel)
     }
 
-    /** Update notification with current playback position. */
-    fun updatePosition(position: Long, duration: Long) {
-        val builder = NotificationCompat.Builder(context, notificationChannelId)
-            .setContentText(formatPosition(position))
+    companion object {
+        const val NOTIFICATION_ID = 0x51_41
 
-        notificationId++
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.notify(notificationId, builder.build())
-    }
+        private const val CHANNEL_ID = "quantum_player_background"
 
-    /** Hide the playback notification. */
-    fun hide() {
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.cancel(notificationId)
-    }
+        private const val REQUEST_CONTENT = 0
+        private const val REQUEST_TOGGLE = 1
+        private const val REQUEST_SEEK_BACK = 2
+        private const val REQUEST_SEEK_FORWARD = 3
+        private const val REQUEST_STOP = 4
 
-    /** Format position to MM:SS. */
-    private fun formatPosition(position: Long): String {
-        val minutes = position / 60000
-        val seconds = (position % 60000) / 1000
-        return "$minutes:${seconds}%2d".format(seconds)
-    }
-
-    /** Handle notification action clicks. */
-    fun handleAction(action: String) {
-        when (action) {
-            "com.quantum.player.PAUSE" -> player?.pause()
-            "com.quantum.player.SKIP_PREV" -> player?.seekTo(
-                (player?.currentPosition ?: 0) - 10000
-            )
-            "com.quantum.player.SKIP_NEXT" -> player?.seekTo(
-                (player?.currentPosition ?: 0) + 10000
-            )
-            "com.quantum.player.STOP" -> player?.stop()
-            "com.quantum.player.SEEK_FORWARD" -> player?.seekTo(
-                (player?.currentPosition ?: 0) + 30000
-            )
-            "com.quantum.player.SEEK_BACKWARD" -> player?.seekTo(
-                (player?.currentPosition ?: 0) - 30000
-            )
-            "com.quantum.player.RESUME" -> player?.play()
+        /** Format a position as m:ss or h:mm:ss. */
+        fun formatPosition(positionMs: Long): String {
+            val safe = positionMs.coerceAtLeast(0L)
+            val totalSeconds = safe / 1000
+            val hours = totalSeconds / 3600
+            val minutes = (totalSeconds % 3600) / 60
+            val seconds = totalSeconds % 60
+            return if (hours > 0) {
+                String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+            } else {
+                String.format(Locale.US, "%d:%02d", minutes, seconds)
+            }
         }
     }
 }

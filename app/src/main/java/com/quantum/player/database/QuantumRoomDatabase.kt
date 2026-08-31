@@ -1,16 +1,21 @@
 package com.quantum.player.database
 
-import android.content.ApplicationContext
+import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import com.quantum.player.model.MediaItem
-import com.quantum.player.model.PlaybackStatistics
-import com.quantum.player.model.WatchState
-import com.quantum.player.model.VideoSettings
 
+/**
+ * The Quantum Room database.
+ *
+ * There used to be two `@Database` classes (`QuantumDatabase` and
+ * `QuantumRoomDatabase`) declaring the same ten entities at the same version,
+ * with a third copy of the type converters nested inside the first one. Only
+ * this class is used (see `QuantumApplication`), so the duplicate was removed
+ * rather than kept as dead, divergent schema.
+ */
 @Database(
     entities = [
         PlaybackHistoryEntity::class,
@@ -27,6 +32,7 @@ import com.quantum.player.model.VideoSettings
     version = 1,
     exportSchema = false
 )
+@TypeConverters(Converters::class)
 abstract class QuantumRoomDatabase : RoomDatabase() {
 
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
@@ -39,48 +45,37 @@ abstract class QuantumRoomDatabase : RoomDatabase() {
     abstract fun thumbnailCacheDao(): ThumbnailCacheDao
     abstract fun metadataCacheDao(): MetadataCacheDao
 
-    /** Create database instance. */
+    /** Get watched states as a reactive stream. */
+    fun getWatchStatesFlow(): Flow<List<WatchStateEntity>> = watchStateDao().loadAll()
+
+    /** Get recent files as a reactive stream. */
+    fun getRecentFilesFlow(): Flow<List<RecentFileEntity>> = recentFilesDao().loadRecent()
+
+    /** Get playback history as a reactive stream. */
+    fun getPlaybackHistoryFlow(): Flow<List<PlaybackHistoryEntity>> =
+        playbackHistoryDao().loadAll()
+
     companion object {
+        const val DATABASE_NAME: String = "quantum-player-db"
+
         @Volatile
         private var INSTANCE: QuantumRoomDatabase? = null
 
-        fun getInstance(context: ApplicationContext): QuantumRoomDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+        /** Get the shared database instance. */
+        fun getInstance(context: Context): QuantumRoomDatabase =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     QuantumRoomDatabase::class.java,
-                    "quantum-player-db"
-                .build()
-                INSTANCE = instance
-                instance
+                    DATABASE_NAME
+                ).build().also { INSTANCE = it }
             }
-        }
 
-        /** Delete database for testing. */
-        fun deleteDatabase(context: ApplicationContext) {
-            Room.deleteDatabase(context.applicationContext)
+        /** Delete the database file. Intended for tests and "clear app data" flows. */
+        fun deleteDatabase(context: Context) {
+            // `Room.deleteDatabase` does not exist; deleting is a Context operation.
+            context.applicationContext.deleteDatabase(DATABASE_NAME)
             INSTANCE = null
-        }
-    }
-
-    /** Get watched states flow. */
-    fun getWatchStatesFlow(): Flow<List<WatchStateEntity>> {
-        return flow {
-            getWatchStateDao().loadAll().collect { emit(it) }
-        }
-    }
-
-    /** Get recent files flow. */
-    fun getRecentFilesFlow(): Flow<List<RecentFileEntity>> {
-        return flow {
-            getRecentFilesDao().loadRecent().collect { emit(it) }
-        }
-    }
-
-    /** Get playback history flow. */
-    fun getPlaybackHistoryFlow(): Flow<List<PlaybackHistoryEntity>> {
-        return flow {
-            getPlaybackHistoryDao().loadAll().collect { emit(it) }
         }
     }
 }

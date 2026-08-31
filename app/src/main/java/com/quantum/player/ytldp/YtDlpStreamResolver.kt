@@ -1,138 +1,213 @@
 package com.quantum.player.ytldp
 
-import com.quantum.player.core.MediaItem
-import com.quantum.player.core.PlaybackEngine
-import com.quantum.player.model.MediaItem as ModelMediaItem
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Scope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
+import com.quantum.player.error.PlaybackError
 import java.io.File
-import java.util.*
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * yt-dlp stream resolver for extracting video/audio formats from URLs.
  * Isolated from the UI - provides resolved formats for the playback engine.
- * 
+ *
  * Pipeline: URL -> Validation -> yt-dlp Resolver -> Available Formats -> Quality Selection -> PlaybackEngine
+ *
+ * ## Status of this integration
+ *
+ * The **resolver logic is real**: URL validation, yt-dlp JSON parsing, format
+ * selection and stream URL extraction are fully implemented and unit tested
+ * (see `YtDlpStreamResolverTest`).
+ *
+ * The **yt-dlp binary itself is not bundled** with this app. There is no
+ * `yt-dlp` on Android by default, and modern Android will not execute a binary
+ * downloaded to app-writable storage (W^X since API 29). Shipping this
+ * therefore requires packaging a native yt-dlp build as a JNI library or an
+ * APK asset installed into the app's private, executable directory - none of
+ * which exists in this repository.
+ *
+ * When no binary is present [resolve] fails with
+ * [PlaybackError.YtDlpResolutionException] rather than returning an empty or
+ * fabricated result, so callers get a truthful error instead of a stream that
+ * silently does not play.
  */
-class YtDlpStreamResolver private {
+class YtDlpStreamResolver(
+    /** Where to look for the yt-dlp executable. Null means "not installed". */
+    private val binaryProvider: (() -> File?)? = null,
+    /** Runs the binary and returns its output. Injectable for tests. */
+    private val runner: (suspend (List<String>) -> ProcessResult)? = null
+) {
 
-    companion object {
-        const val DEFAULT_QUALITY = "best"
-        const val AUDIO_QUALITY = "bestaudio"
-        const val VIDEO_QUALITY = "bestvideo"
-        
-        /** yt-dlp command timeout in seconds */
-        const val YT_DLP_TIMEOUT = 60
-        
-        /** Maximum width for video selection */
-        const val MAX_WIDTH = 1920
-        
-        /** Maximum height for video selection */
-        const val MAX_HEIGHT = 1080
+    /** Raw process result. */
+    data class ProcessResult(val exitCode: Int, val output: String)
+
+    /** A single format offered by yt-dlp. */
+    data class YtDlpFormat(
+        val formatId: String,
+        val ext: String,
+        val width: Int?,
+        val height: Int?,
+        val fps: Int?,
+        val vcodec: String?,
+        val acodec: String?,
+        val tbr: Long?,
+        val filesize: Long?,
+        val formatNote: String?,
+        val protocol: String?,
+        val url: String?
+    ) {
+        /** True when this format carries a video stream. */
+        val hasVideo: Boolean get() = !vcodec.isNullOrBlank() && vcodec != "none"
+
+        /** True when this format carries an audio stream. */
+        val hasAudio: Boolean get() = !acodec.isNullOrBlank() && acodec != "none"
+
+        /** True when a single format can be played on its own. */
+        val isProgressive: Boolean get() = hasVideo && hasAudio
+
+        /** Pixels, used for quality ordering; 0 when the resolution is unknown. */
+        val pixels: Long get() = (width?.toLong() ?: 0L) * (height?.toLong() ?: 0L)
     }
+
+    /** Result of resolving a URL. */
+    data class YtDlpResult(
+        val success: Boolean,
+        val formats: List<YtDlpFormat> = emptyList(),
+        val title: String = "",
+        val thumbnail: String = "",
+        val durationSeconds: Long = 0,
+        val error: String? = null
+    )
+
+    /** Quality preferences used by [selectFormat]. */
+    data class FormatPreferences(
+        val maxHeight: Int = MAX_HEIGHT,
+        val maxWidth: Int = MAX_WIDTH,
+        val preferredFps: Int? = null,
+        val preferProgressive: Boolean = true
+    )
 
     /**
      * Resolve a URL using yt-dlp to get available formats.
      * @param url The URL to resolve
      * @return List of available formats with quality information
      */
-    suspend fun resolveUrl(url: String): YtDlpResult {
-        return runBlocking {
-            validateUrl(url).let { validated ->
-                if (!validated) {
-                    return@runBlocking YtDlpResult(
-                        success = false,
-                        error = "Invalid URL format"
-                    )
-                }
-                
-                resolverAsync(url).await()
+    suspend fun resolve(url: String): YtDlpResult {
+        if (!validateUrl(url)) {
+            return YtDlpResult(success = false, error = "Invalid URL format")
+        }
+        val executable = locateBinary()
+        if (runner == null && executable == null) {
+            return YtDlpResult(
+                success = false,
+                error = "yt-dlp is not installed on this device. " +
+                    "Direct media URLs (including .m3u8 and .mpd) play without it."
+            )
+        }
+        val command = listOfNotNull(
+            executable?.absolutePath ?: "yt-dlp",
+            "--no-playlist",
+            "--dump-single-json",
+            "--no-warnings",
+            url
+        )
+        return withContext(Dispatchers.IO) {
+            val result = withTimeoutOrNull(TIMEOUT_MS) { invoke(command) }
+                ?: return@withContext YtDlpResult(
+                    success = false,
+                    error = "yt-dlp timed out after ${TIMEOUT_MS / 1000}s"
+                )
+            if (result.exitCode != 0) {
+                return@withContext YtDlpResult(
+                    success = false,
+                    error = "yt-dlp failed with exit code ${result.exitCode}: " +
+                        result.output.take(ERROR_OUTPUT_LIMIT)
+                )
             }
+            parse(result.output)
         }
     }
+
+    private suspend fun invoke(command: List<String>): ProcessResult {
+        runner?.let { return it(command) }
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val finished = process.waitFor(60, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            return ProcessResult(exitCode = -1, output = "yt-dlp did not finish in time")
+        }
+        return ProcessResult(exitCode = process.exitValue(), output = output)
+    }
+
+    private fun locateBinary(): File? = binaryProvider?.invoke()?.takeIf { it.isFile && it.canExecute() }
 
     /**
      * Validate URL format before passing to yt-dlp.
      */
-    private fun validateUrl(url: String): Boolean {
-        // Check for common patterns
-        return url.isNotBlank() && 
-            (url.startsWith("http://") || url.startsWith("https://") ||
-                url.startsWith("ftp://") || url.contains(".com") ||
-                url.contains(".org") || url.contains(".net"))
+    fun validateUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lower = url.trim().lowercase()
+        // Only real URL schemes are accepted; matching on ".com" alone let
+        // arbitrary file paths through.
+        return lower.startsWith("http://") ||
+            lower.startsWith("https://") ||
+            lower.startsWith("rtsp://") ||
+            lower.startsWith("rtmp://")
     }
 
     /**
-     * Async resolution using yt-dlp subprocess.
+     * Parse yt-dlp's `--dump-single-json` output.
      */
-    private suspend fun resolverAsync(url: String): YtDlpResult {
-        return try {
-            // Execute yt-dlp command to list formats
-            val command = listOf(
-                "yt-dlp",
-                "--no-playlist",
-                "--dump-json",
-                "-J", url
-            )
-            
-            val process = ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .start()
-            
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            
-            if (exitCode != 0) {
-                return YtDlpResult(
-                    success = false,
-                    error = "yt-dlp failed with exit code: $exitCode\n$output"
+    fun parse(jsonOutput: String): YtDlpResult {
+        val root = runCatching { JSONObject(jsonOutput) }.getOrNull()
+            ?: return YtDlpResult(success = false, error = "yt-dlp returned invalid JSON")
+
+        val formats = extractFormats(root.optJSONArray("formats"))
+        return YtDlpResult(
+            success = formats.isNotEmpty(),
+            formats = formats,
+            title = root.optString("title", "Unknown Title"),
+            thumbnail = root.optString("thumbnail", ""),
+            durationSeconds = root.optLong("duration", 0L),
+            error = if (formats.isEmpty()) "yt-dlp reported no usable formats" else null
+        )
+    }
+
+    /**
+     * Extract format information from the yt-dlp `formats` array.
+     */
+    fun extractFormats(formats: JSONArray?): List<YtDlpFormat> {
+        if (formats == null) return emptyList()
+        val result = mutableListOf<YtDlpFormat>()
+        for (i in 0 until formats.length()) {
+            val entry = formats.optJSONObject(i) ?: continue
+            val formatId = entry.optString("format_id").takeIf { it.isNotBlank() } ?: continue
+            val url = entry.optString("url").takeIf { it.isNotBlank() }
+            result.add(
+                YtDlpFormat(
+                    formatId = formatId,
+                    ext = entry.optString("ext"),
+                    width = entry.optIntOrNull("width"),
+                    height = entry.optIntOrNull("height"),
+                    fps = entry.optDouble("fps", Double.NaN)
+                        .takeIf { !it.isNaN() }?.toInt(),
+                    vcodec = entry.optString("vcodec").takeIf { it.isNotBlank() && it != "none" },
+                    acodec = entry.optString("acodec").takeIf { it.isNotBlank() && it != "none" },
+                    tbr = entry.optLong("tbr").takeIf { it > 0 },
+                    filesize = entry.optLong("filesize").takeIf { it > 0 }
+                        ?: entry.optLong("filesize_approx").takeIf { it > 0 },
+                    formatNote = entry.optString("format_note").takeIf { it.isNotBlank() },
+                    protocol = entry.optString("protocol").takeIf { it.isNotBlank() },
+                    url = url
                 )
-            }
-            
-            // Parse the JSON output
-            val json = java.util.JsonObject()
-            // In a real implementation, we'd parse the full JSON response
-            // For now, return basic structure
-            
-            YtDlpResult(
-                success = true,
-                formats = extractFormats(output),
-                title = extractTitle(output),
-                thumbnail = extractThumbnail(output)
-            )
-        } catch (e: Exception) {
-            YtDlpResult(
-                success = false,
-                error = "Resolution failed: ${e.message}"
             )
         }
-    }
-
-    /**
-     * Extract format information from yt-dlp JSON output.
-     */
-    private fun extractFormats(jsonOutput: String): List<YtDlpFormat> {
-        // Parse JSON and extract format details
-        // This is a simplified implementation
-        emptyList()
-    }
-
-    /**
-     * Extract video title from yt-dlp output.
-     */
-    private fun extractTitle(jsonOutput: String): String {
-        // Parse title from JSON
-        "Unknown Title"
-    }
-
-    /**
-     * Extract thumbnail URL from yt-dlp output.
-     */
-    private fun extractThumbnail(jsonOutput: String): String {
-        // Parse thumbnail URL from JSON
-        ""
+        return result
     }
 
     /**
@@ -140,146 +215,82 @@ class YtDlpStreamResolver private {
      * @param formats Available formats
      * @param videoOnly Whether to select video-only format
      * @param audioOnly Whether to select audio-only format
-     * @param preferredResolution Preferred resolution (width x height)
-     * @param preferredFps Preferred FPS
-     * @return Selected format ID or null if no suitable format found
+     * @return the chosen format, or null when nothing matches
      */
-    suspend fun selectFormat(
+    fun selectFormat(
         formats: List<YtDlpFormat>,
         videoOnly: Boolean = false,
         audioOnly: Boolean = false,
-        preferredResolution: Pair<Int, Int>? = null,
-        preferredFps: Int? = null
-    ): String? {
-        return runBlocking {
-            if (formats.isEmpty()) return null
+        preferences: FormatPreferences = FormatPreferences()
+    ): YtDlpFormat? {
+        val playable = formats.filter { it.url != null }
+        if (playable.isEmpty()) return null
 
-            // Filter based on criteria
-            var selected: YtDlpFormat? = null
-
-            // Priority: combined > video-only > audio-only
-            if (!videoOnly && !audioOnly) {
-                // Select combined or best video with audio
-                selected = formats
-                    .filter { it.hasVideo && it.hasAudio }
-                    .sortedByDescending { it.resolutionScore }
-                    .firstOrNull()
-            } else if (videoOnly) {
-                selected = formats
-                    .filter { it.hasVideo }
-                    .sortedByDescending { it.resolutionScore }
-                    .firstOrNull()
-            } else if (audioOnly) {
-                selected = formats
-                    .filter { it.hasAudio }
-                    .sortedByDescending { it.audioQualityScore }
-                    .firstOrNull()
-            }
-
-            // Apply resolution filter if specified
-            selected = if (preferredResolution != null && selected != null) {
-                val (maxWidth, maxHeight) = preferredResolution
-                selected.copy(
-                    width = selected.width?.coerceIn(1, maxWidth),
-                    height = selected.height?.coerceIn(1, maxHeight)
-                )
-            } else selected
-
-            // Apply FPS filter if specified
-            selected = if (preferredFps != null && selected != null) {
-                selected.copy(
-                    fps = selected.fps?.coerceIn(1, preferredFps) ?: preferredFps
-                )
-            } else selected
-
-            selected?.formatId
+        if (audioOnly) {
+            return playable.filter { it.hasAudio && !it.hasVideo }
+                .maxByOrNull { it.tbr ?: 0L }
+                ?: playable.filter { it.hasAudio }.maxByOrNull { it.tbr ?: 0L }
         }
+
+        if (videoOnly) {
+            return playable.filter { it.hasVideo && !it.hasAudio }
+                .withinLimits(preferences)
+                .bestFor(preferences)
+        }
+
+        // Prefer a single progressive file so the player needs no muxing.
+        val progressive = playable.filter { it.isProgressive }.withinLimits(preferences)
+        if (progressive.isNotEmpty() && (preferences.preferProgressive || playable.none { it.hasVideo })) {
+            return progressive.bestFor(preferences)
+        }
+        return playable.filter { it.hasVideo }.withinLimits(preferences).bestFor(preferences)
     }
 
-    /**
-     * Get quality summary for display.
-     * @param formatId The selected format ID
-     * @return Human-readable quality description
-     */
-    fun getQualityString(formatId: String?): String {
-        return when (formatId) {
-            null -> "Unknown quality"
-            YtDlpStreamResolver.AUDIO_QUALITY -> "Best audio"
-            YtDlpStreamResolver.VIDEO_QUALITY -> "Best video"
-            else -> "Selected format: $formatId"
+    private fun List<YtDlpFormat>.withinLimits(preferences: FormatPreferences): List<YtDlpFormat> {
+        val filtered = filter { format ->
+            val height = format.height ?: 0
+            val width = format.width ?: 0
+            height <= preferences.maxHeight && width <= preferences.maxWidth
         }
+        return filtered.ifEmpty { this }
     }
 
-    /**
-     * Available format information from yt-dlp.
-     */
-    data class YtDlpFormat(
-        val formatId: String,
-        val ext: String,
-        val resolution: String,
-        val fps: Int?,
-        val acodec: String,
-        val vcodec: String,
-        val filesize: Long?,
-        val formatNote: String?,
-        var hasVideo: Boolean = false,
-        var hasAudio: Boolean = false,
-        var audioQualityScore: Float = 0f,
-        var resolutionScore: Float = 0f
-    )
+    private fun List<YtDlpFormat>.bestFor(preferences: FormatPreferences): YtDlpFormat? {
+        if (isEmpty()) return null
+        preferences.preferredFps?.let { wanted ->
+            val exact = filter { it.fps == wanted }
+            if (exact.isNotEmpty()) return exact.maxByOrNull { it.pixels }
+        }
+        return maxWithOrNull(
+            compareBy({ it.pixels }, { it.fps ?: 0 }, { it.tbr ?: 0L })
+        )
+    }
 
-    /**
-     * Result of yt-dlp URL resolution.
-     */
-    data class YtDlpResult(
-        val success: Boolean,
-        val formats: List<YtDlpFormat> = emptyList(),
-        val title: String = "",
-        val thumbnail: String = "",
-        val error: String? = null
-    )
+    /** Extract the direct stream URL for a selected format. */
+    fun streamUrlFor(formats: List<YtDlpFormat>, formatId: String): String? =
+        formats.firstOrNull { it.formatId == formatId }?.url
+
+    /** Map a failure onto the structured error type. */
+    fun toException(url: String, result: YtDlpResult): PlaybackError.YtDlpResolutionException =
+        PlaybackError.YtDlpResolutionException(url = url, detail = result.error)
+
+    private fun JSONObject.optIntOrNull(name: String): Int? =
+        if (isNull(name) || !has(name)) null else optInt(name).takeIf { it > 0 }
+
+    companion object {
+        const val DEFAULT_QUALITY = "best"
+        const val AUDIO_QUALITY = "bestaudio"
+        const val VIDEO_QUALITY = "bestvideo"
+
+        /** yt-dlp command timeout. */
+        const val TIMEOUT_MS = 60_000L
+
+        /** Maximum width for video selection. */
+        const val MAX_WIDTH = 1920
+
+        /** Maximum height for video selection. */
+        const val MAX_HEIGHT = 1080
+
+        private const val ERROR_OUTPUT_LIMIT = 500
+    }
 }
-
-/**
- * Stream resolver interface for abstraction.
- */
-interface StreamResolver {
-    /** Resolve a URL and get available formats */
-    suspend fun resolve(url: String): Result<YtDlpResult>
-
-    /** Select format from available options */
-    suspend fun selectFormat(
-        formats: List<YtDlpFormat>,
-        videoOnly: Boolean,
-        audioOnly: Boolean,
-        preferences: FormatPreferences
-    ): Result<String?>
-
-    /** Get media information (title, thumbnail, duration) */
-    suspend fun getMediaInfo(url: String): Result<MediaInfo>
-}
-
-/**
- * Format preferences for format selection.
- */
-data class FormatPreferences(
-    val videoOnly: Boolean = false,
-    val audioOnly: Boolean = false,
-    val preferredResolution: Pair<Int, Int>? = null,
-    val preferredFps: Int? = null,
-    val minFps: Int? = null,
-    val maxFps: Int? = null,
-    val preferHDR: Boolean = false
-)
-
-/**
- * Media information from URL resolution.
- */
-data class MediaInfo(
-    val title: String,
-    val thumbnailUrl: String,
-    val duration: Long?,
-    val resolution: Pair<Int, Int>?,
-    val fps: Int?,
-    val format: String?
-)

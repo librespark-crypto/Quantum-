@@ -1,185 +1,161 @@
 package com.quantum.player.pip
 
+import android.app.Activity
 import android.app.PictureInPictureParams
-import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
-import android.util.Log
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
-import androidx.core.app.ActivityOptionsCompat
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.OnGoingNotification
+import android.os.Bundle
+import android.util.Rational
 import com.quantum.player.core.PlaybackEngine
+import com.quantum.player.core.PlaybackState
 import com.quantum.player.model.MediaItem
-import com.quantum.player.player.QuantumApplication
 
 /**
  * Picture-in-Picture handler for Quantum player.
- * Manages PiP mode, controls, and lifecycle.
+ * Manages PiP mode, aspect ratio and state restoration.
+ *
+ * The previous version referenced APIs that do not exist
+ * (`activity.window.setCallbackProxy`, `ComponentActivityCallback`,
+ * `Activity.exitPictureInPictureMode`, `setPictureInPictureRotation`,
+ * `PictureInPictureParams.Builder.setMediaDescription`,
+ * `androidx.lifecycle.OnGoingNotification`), took `activity`/`engine` as plain
+ * constructor parameters and then used them as properties, and defined an
+ * extension `setAspectRatio` that called itself recursively.
+ *
+ * PiP requires API 26; every entry point here is a no-op below that.
  */
 class QuantumPiPHandler(
-    activity: ComponentActivity,
-    engine: PlaybackEngine
-) : DefaultLifecycleObserver {
+    private val activity: Activity,
+    private val engine: PlaybackEngine
+) {
 
     private var currentMediaItem: MediaItem? = null
-    private var pipEnabled = false
 
-    override fun onStart(lifecycle: LifecycleOwner) {
-        // Register PiP state callback
-        activity.window?.setCallbackProxy(object : ComponentActivityCallbackProxy(activity) {
-            override fun onPictureInPictureModeChanged(
-                isPictureInPicture: Boolean,
-                newConfig: Configuration?
-            ) {
-                pipEnabled = isPictureInPicture
-                if (isPictureInPicture) {
-                    setupPiPControls()
-                }
-            }
-        })
-    }
+    /** True while the activity is in picture-in-picture mode. */
+    var isInPiPMode: Boolean = false
+        private set
 
-    override fun onStop(lifecycle: LifecycleOwner) {
-        // Clean up PiP callback
-    }
+    /** Last video dimensions, used to keep the PiP window correctly proportioned. */
+    private var lastWidth: Int = 0
+    private var lastHeight: Int = 0
+
+    /** Whether this device supports PiP at all. */
+    val isSupported: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            activity.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
 
     /**
      * Enter PiP mode with the current media item.
+     * Returns false when PiP is unavailable or playback is not active.
      */
-    fun enterPiP(mediaItem: MediaItem, options: Bundle? = null) {
+    fun enterPiP(mediaItem: MediaItem?): Boolean {
+        if (!isSupported) return false
+        // Entering PiP with nothing playing just shows an empty window.
+        if (!engine.isPlaying && !engine.isBuffering) return false
         currentMediaItem = mediaItem
+        return enterPiPInternal()
+    }
 
-        // Set up PiP params
-        var params: PictureInPictureParams? = null
+    /** Enter PiP for whatever is currently playing. */
+    fun enterPiPForCurrentPlayback(): Boolean {
+        if (!isSupported) return false
+        return enterPiPInternal()
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            params = PictureInPictureParams.Builder()
-                .setAspectRatio(
-                    if (mediaItem.videoWidth > 0 && mediaItem.videoHeight > 0) {
-                        Rational(mediaItem.videoWidth, mediaItem.videoHeight)
-                    } else {
-                        Rational(16, 9)
-                    }
-                )
-                .setMediaDescription(
-                    android.media.MediaDescription.Builder()
-                        .setTitle(mediaItem.title ?: "Quantum")
-                        .setSubtitle(mediaItem.artist)
-                        .build()
-                )
-                .setRotationEnabled(true)
-                .build()
+    private fun enterPiPInternal(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        return runCatching {
+            activity.enterPictureInPictureMode(buildParams())
+        }.getOrDefault(false)
+    }
+
+    private fun buildParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(aspectRatioFor(lastWidth, lastHeight))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Let the system drop into PiP automatically when the user leaves.
+            builder.setAutoEnterEnabled(true)
+            builder.setSeamlessResizeEnabled(true)
         }
-
-        activity.enterPictureInPictureMode(params)
+        return builder.build()
     }
 
-    /**
-     * Exit PiP mode and return to fullscreen.
-     */
-    fun exitPiP() {
-        currentMediaItem = null
-        activity.exitPictureInPictureMode()
-    }
-
-    /**
-     * Setup PiP controls in the system notification/overlay.
-     */
-    private fun setupPiPControls() {
-        // PiP controls are system-provided
-        // - Tap to play/pause
-        // - System gestures for seek/volume/brightness
-        // - PiP-specific controls in the PiP window
-    }
-
-    /**
-     * Update PiP aspect ratio when video dimensions change.
-     */
+    /** Keep the PiP window proportioned when the video size becomes known. */
     fun updateAspectRatio(videoWidth: Int, videoHeight: Int) {
-        // Re-enter PiP with new aspect ratio if needed
+        if (videoWidth <= 0 || videoHeight <= 0) return
+        if (videoWidth == lastWidth && videoHeight == lastHeight) return
+        lastWidth = videoWidth
+        lastHeight = videoHeight
+        if (!isSupported || !isInPiPMode) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching { activity.setPictureInPictureParams(buildParams()) }
+    }
+
+    /** Called from `Activity.onPictureInPictureModeChanged`. */
+    fun onPictureInPictureModeChanged(inPiP: Boolean, newConfig: Configuration?) {
+        isInPiPMode = inPiP
+        if (!inPiP) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching { activity.setPictureInPictureParams(buildParams()) }
     }
 
     /**
      * Handle back press in PiP mode.
-     * Exits PiP and returns to fullscreen activity.
+     * @return true when the press was consumed
      */
-    fun handleBackPress(
-        onExitPiP: () -> Unit,
-        onBackToApp: () -> Unit
-    ): Boolean {
-        if (pipEnabled) {
-            exitPiP()
-            return true
-        }
-        return false
+    fun handleBackPress(onExitPiP: () -> Unit = {}, onBackToApp: () -> Unit = {}): Boolean {
+        if (!isInPiPMode) return false
+        onExitPiP()
+        return true
     }
 
-    /**
-     * Update the PiP notification with current playback state.
-     */
-    fun updatePiPNotification(
-        isPlaying: Boolean,
-        currentPosition: Long,
-        duration: Long
-    ) {
-        // Update ongoing notification for PiP session
-        // This provides playback controls in the notification shade
+    /** Save PiP state for restoration across configuration changes. */
+    fun savePiPState(outBundle: Bundle) {
+        outBundle.putBoolean(KEY_PIP_ACTIVE, isInPiPMode)
+        outBundle.putString(KEY_CURRENT_URI, currentMediaItem?.uri.orEmpty())
+        outBundle.putInt(KEY_WIDTH, lastWidth)
+        outBundle.putInt(KEY_HEIGHT, lastHeight)
     }
 
-    /**
-     * Rotate the PiP window based on device orientation.
-     */
-    fun setPiPRotation(rotation: Int) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            activity.setPictureInPictureRotation(rotation)
-        }
+    /** Restore PiP state. */
+    fun restorePiPState(savedBundle: Bundle?): MediaItem? {
+        if (savedBundle == null) return null
+        lastWidth = savedBundle.getInt(KEY_WIDTH, 0)
+        lastHeight = savedBundle.getInt(KEY_HEIGHT, 0)
+        isInPiPMode = savedBundle.getBoolean(KEY_PIP_ACTIVE, false)
+        val uri = savedBundle.getString(KEY_CURRENT_URI).orEmpty()
+        if (uri.isBlank()) return null
+        val item = MediaItem(uri = uri, title = uri.substringAfterLast('/'))
+        currentMediaItem = item
+        return item
     }
 
-    /**
-     * Get current PiP mode status.
-     */
-    fun isInPiPMode(): Boolean = pipEnabled
+    /** Whether playback should keep running while in PiP. */
+    fun shouldKeepPlaying(state: PlaybackState): Boolean =
+        state == PlaybackState.Playing || state == PlaybackState.Buffering
 
-    /**
-     * Save PiP state for restoration.
-     */
-    fun savePiPState(
-        outBundle: Bundle
-    ) {
-        outBundle.putBoolean("pip_active", pipEnabled)
-        outBundle.putString("current_uri", currentMediaItem?.uri ?: "")
-    }
+    companion object {
+        private const val KEY_PIP_ACTIVE = "pip_active"
+        private const val KEY_CURRENT_URI = "current_uri"
+        private const val KEY_WIDTH = "pip_width"
+        private const val KEY_HEIGHT = "pip_height"
 
-    /**
-     * Restore PiP state.
-     */
-    fun restorePiPState(
-        savedBundle: Bundle
-    ) {
-        if (savedBundle.getBoolean("pip_active", false)) {
-            // Re-enter PiP mode
-            // Note: URI would need to be re-parsed and playback resumed
+        /** Default PiP window proportion when the video size is unknown. */
+        private const val DEFAULT_NUMERATOR = 16
+        private const val DEFAULT_DENOMINATOR = 9
+
+        /**
+         * Build a valid PiP aspect ratio. The platform rejects ratios outside
+         * roughly 1:2.39..2.39:1, so extreme video sizes are clamped.
+         */
+        fun aspectRatioFor(width: Int, height: Int): Rational {
+            if (width <= 0 || height <= 0) return Rational(DEFAULT_NUMERATOR, DEFAULT_DENOMINATOR)
+            val clampedWidth = width.coerceIn(1, 4096)
+            val clampedHeight = height.coerceIn(1, 4096)
+            val ratio = clampedWidth.toFloat() / clampedHeight.toFloat()
+            val safe = ratio.coerceIn(0.42f, 2.39f)
+            return Rational((safe * 1000).toInt(), 1000)
         }
     }
-
-    /**
-     * Custom callback proxy for PiP mode changes.
-     */
-    private class ComponentActivityCallbackProxy(
-        private val activity: ComponentActivity
-    ) : ComponentActivityCallback() {
-        // Proxy callback for PiP mode changes
-    }
-}
-
-/**
- * Helper function to configure PiP params with proper aspect ratio.
- */
-fun PictureInPictureParams.Builder.setAspectRatio(
-    ratio: Rational
-): PictureInPictureParams.Builder {
-    return this.setAspectRatio(ratio)
 }

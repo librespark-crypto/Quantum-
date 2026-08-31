@@ -1,21 +1,36 @@
 package com.quantum.player.error
 
-import com.quantum.player.core.PlaybackState
-
 /**
  * Structured playback errors with user-friendly messages and solutions.
  * Never crash because a codec or stream is unsupported.
+ *
+ * Every entry carries:
+ *  - [PlaybackException.code]             stable machine readable id
+ *  - [PlaybackException.message]          developer facing message
+ *  - [PlaybackException.userMessage]      text safe to show to a user
+ *  - [PlaybackException.possibleSolution] actionable hint
+ *  - [PlaybackException.retryable]        whether a retry button makes sense
+ *  - [PlaybackException.detail]           optional backend supplied detail
+ *
+ * This class is deliberately free of Android/Media3 imports so the mapping can
+ * be exercised by plain JVM unit tests.
  */
 object PlaybackError {
 
     /** Base error class. */
-    sealed class PlaybackException(
+    open class PlaybackException(
         val code: String,
-        val message: String,
+        override val message: String,
         val userMessage: String,
         val possibleSolution: String,
-        val retryable: Boolean = false
-    )
+        val retryable: Boolean = false,
+        val detail: String? = null,
+        cause: Throwable? = null
+    ) : RuntimeException(message, cause) {
+
+        override fun toString(): String =
+            "PlaybackException[$code] $message" + (detail?.let { " ($it)" } ?: "")
+    }
 
     /** Unsupported codec error. */
     object UnsupportedCodec : PlaybackException(
@@ -31,7 +46,7 @@ object PlaybackError {
         code = "unsupported_container",
         message = "Container format not supported",
         userMessage = "The file container format is not supported.",
-        possibleSolution = "Try renaming the file extension or using a different source.",
+        possibleSolution = "Try a different source, or a file in a common container such as MP4 or MKV.",
         retryable = false
     )
 
@@ -58,7 +73,8 @@ object PlaybackError {
         code = "yt_dlp_resolution_error",
         message = "Failed to resolve URL with yt-dlp",
         userMessage = "Could not extract video information from the URL.",
-        possibleSolution = "The URL might be restricted, age-limited, or unavailable. Try a different URL or use the built-in browser.",
+        possibleSolution = "The URL might be restricted, age-limited, or unavailable. " +
+            "Try a different URL, or play a direct media link instead.",
         retryable = true
     )
 
@@ -76,7 +92,7 @@ object PlaybackError {
         code = "drm_protected",
         message = "DRM/protected stream detected",
         userMessage = "This stream is protected by DRM and cannot be played.",
-        possibleSolution = "This content requires licensed DRM modules. Some platforms may provide these.",
+        possibleSolution = "This content requires a licensed DRM module, which this player does not ship.",
         retryable = false
     )
 
@@ -112,168 +128,186 @@ object PlaybackError {
         code = "video_decoder_failure",
         message = "Video decoder failure",
         userMessage = "Could not initialize the video decoder.",
-        possibleSolution = "Try enabling software video decoding in settings, or try a different output format.",
+        possibleSolution = "Try enabling software video decoding in settings, or try a different source.",
         retryable = true
     )
 
-    /** Convert exception to PlaybackException. */
-    fun fromException(e: Exception): PlaybackException = when (e) {
-        is UnsupportedCodecException -> UnsupportedCodec
-        is UnsupportedContainerException -> UnsupportedContainer
-        is NetworkException -> NetworkError
-        is InvalidUrlException -> InvalidUrl
-        is YtDlpResolutionException -> YtDlpResolutionError
-        is DecoderInitializationException -> DecoderInitializationError
-        is DRMException -> DrmProtectedStream
-        is InvalidHlsPlaylistException -> InvalidHlsPlaylist
-        is InvalidDashManifestException -> InvalidDashManifest
-        is AudioDecoderException -> AudioDecoderFailure
-        is VideoDecoderException -> VideoDecoderFailure
-        else -> PlaybackException(
-            code = "unknown_error",
-            message = e.message ?: "Unknown error",
-            userMessage = "An unexpected error occurred. Please try again.",
-            retryable = true
-        )
-    }
+    /** Subtitle track could not be loaded. */
+    object SubtitleFailure : PlaybackException(
+        code = "subtitle_failure",
+        message = "Subtitle track could not be loaded",
+        userMessage = "The subtitle track could not be read.",
+        possibleSolution = "Check the subtitle file or select a different track.",
+        retryable = true
+    )
 
-    /** Data classes for specific exception types. */
-    data class UnsupportedCodecException(
+    /** The media source was unreachable or the file does not exist. */
+    object SourceNotFound : PlaybackException(
+        code = "source_not_found",
+        message = "Media source not found",
+        userMessage = "The file or stream could not be found.",
+        possibleSolution = "Check that the file still exists or that the link is still valid.",
+        retryable = true
+    )
+
+    /** Playback was interrupted by a timeout. */
+    object Timeout : PlaybackException(
+        code = "timeout",
+        message = "Playback timed out",
+        userMessage = "The stream stopped responding.",
+        possibleSolution = "Check your connection speed and try again.",
+        retryable = true
+    )
+
+    /** Anything that does not map onto a known category. */
+    object UnknownError : PlaybackException(
+        code = "unknown_error",
+        message = "Unknown playback error",
+        userMessage = "An unexpected error occurred.",
+        possibleSolution = "Please try again.",
+        retryable = true
+    )
+
+    // ---------------------------------------------------------------------
+    // Throwable types thrown by the resolver/backend layers.
+    // ---------------------------------------------------------------------
+
+    private fun detailSuffix(detail: String?): String =
+        if (detail.isNullOrBlank()) "" else ": $detail"
+
+    class UnsupportedCodecException(
         val mimeType: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Unsupported codec: $mimeType"
-        }
-    }
+    ) : RuntimeException("Unsupported codec: $mimeType" + detailSuffix(detail))
 
-    data class UnsupportedContainerException(
+    class UnsupportedContainerException(
         val container: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Unsupported container: $container"
-        }
-    }
+    ) : RuntimeException("Unsupported container: $container" + detailSuffix(detail))
 
-    data class NetworkException(
-        val cause: String? = null
-            ) : RuntimeException(cause) {
-        init {
-            message = "Network error"
-        }
-    }
+    class NetworkException(
+        val detail: String? = null,
+        cause: Throwable? = null
+    ) : RuntimeException("Network error" + detailSuffix(detail), cause)
 
-    data class InvalidUrlException(
+    class InvalidUrlException(
         val url: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Invalid URL: $url"
-        }
-    }
+    ) : RuntimeException("Invalid URL: $url" + detailSuffix(detail))
 
-    data class YtDlpResolutionException(
+    class YtDlpResolutionException(
         val url: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "yt-dlp resolution failed for: $url"
-        }
-    }
+    ) : RuntimeException("yt-dlp resolution failed for: $url" + detailSuffix(detail))
 
-    data class DecoderInitializationException(
+    class DecoderInitializationException(
         val mimeType: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Decoder initialization failed for: $mimeType"
-        }
-    }
+    ) : RuntimeException("Decoder initialization failed for: $mimeType" + detailSuffix(detail))
 
-    data class DRMException(
-        val message: String? = null
-            ) : RuntimeException(message) {
-        init {
-            message = "DRM/protected stream detected"
-        }
-    }
+    class DRMException(
+        val detail: String? = null
+    ) : RuntimeException("DRM/protected stream detected" + detailSuffix(detail))
 
-    data class InvalidHlsPlaylistException(
+    class InvalidHlsPlaylistException(
         val url: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Invalid HLS playlist: $url"
-        }
-    }
+    ) : RuntimeException("Invalid HLS playlist: $url" + detailSuffix(detail))
 
-    data class InvalidDashManifestException(
+    class InvalidDashManifestException(
         val url: String,
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Invalid DASH manifest: $url"
-        }
-    }
+    ) : RuntimeException("Invalid DASH manifest: $url" + detailSuffix(detail))
 
-    data class AudioDecoderException(
+    class AudioDecoderException(
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Audio decoder failure"
-        }
-    }
+    ) : RuntimeException("Audio decoder failure" + detailSuffix(detail))
 
-    data class VideoDecoderException(
+    class VideoDecoderException(
         val detail: String? = null
-            ) : RuntimeException(detail) {
-        init {
-            message = "Video decoder failure"
-        }
-    }
+    ) : RuntimeException("Video decoder failure" + detailSuffix(detail))
+
+    class SubtitleException(
+        val detail: String? = null
+    ) : RuntimeException("Subtitle track could not be loaded" + detailSuffix(detail))
+
+    class SourceNotFoundException(
+        val uri: String,
+        val detail: String? = null
+    ) : RuntimeException("Media source not found: $uri" + detailSuffix(detail))
+
+    // ---------------------------------------------------------------------
+    // Mapping
+    // ---------------------------------------------------------------------
+
+    /** Attach backend supplied detail to a catalog entry without losing the category. */
+    fun withDetail(
+        base: PlaybackException,
+        detail: String?,
+        cause: Throwable? = null
+    ): PlaybackException = PlaybackException(
+        code = base.code,
+        message = base.message,
+        userMessage = base.userMessage,
+        possibleSolution = base.possibleSolution,
+        retryable = base.retryable,
+        detail = detail?.takeIf { it.isNotBlank() } ?: base.detail,
+        cause = cause ?: base.cause
+    )
 
     /**
-     * Display error information to the user.
-     * Shows what happened + possible solution + retry option.
+     * Convert any throwable into a structured [PlaybackException].
+     *
+     * Nothing is ever swallowed: unknown throwables become [UnknownError] with
+     * the original message preserved as detail and as the cause.
      */
-    fun showError(
-        exception: PlaybackException,
-        onRetry: () -> Unit,
-        onDismiss: () -> Unit
-    ) {
-        // In a real UI, this would show an alert dialog with:
-        // - What happened (userMessage)
-        // - Possible solution
-        // - Retry button (calls onRetry)
-        // - Dismiss button (calls onDismiss)
-
-        // For now, print to console
-        println("ERROR [${exception.code}]: ${exception.userMessage}")
-        println("SOLUTION: ${exception.possibleSolution}")
-        println("---")
+    fun fromException(e: Throwable): PlaybackException = when (e) {
+        is PlaybackException -> e
+        is UnsupportedCodecException -> withDetail(UnsupportedCodec, "${e.mimeType} ${e.detail.orEmpty()}".trim(), e)
+        is UnsupportedContainerException -> withDetail(UnsupportedContainer, "${e.container} ${e.detail.orEmpty()}".trim(), e)
+        is NetworkException -> withDetail(NetworkError, e.detail, e)
+        is InvalidUrlException -> withDetail(InvalidUrl, "${e.url} ${e.detail.orEmpty()}".trim(), e)
+        is YtDlpResolutionException -> withDetail(YtDlpResolutionError, "${e.url} ${e.detail.orEmpty()}".trim(), e)
+        is DecoderInitializationException -> withDetail(DecoderInitializationError, e.mimeType, e)
+        is DRMException -> withDetail(DrmProtectedStream, e.detail, e)
+        is InvalidHlsPlaylistException -> withDetail(InvalidHlsPlaylist, e.url, e)
+        is InvalidDashManifestException -> withDetail(InvalidDashManifest, e.url, e)
+        is AudioDecoderException -> withDetail(AudioDecoderFailure, e.detail, e)
+        is VideoDecoderException -> withDetail(VideoDecoderFailure, e.detail, e)
+        is SubtitleException -> withDetail(SubtitleFailure, e.detail, e)
+        is SourceNotFoundException -> withDetail(SourceNotFound, e.uri, e)
+        else -> withDetail(UnknownError, e.message ?: e.javaClass.simpleName, e)
     }
 
     /** Get user-friendly error title. */
-    fun getErrorTitle(exception: PlaybackException): String {
-        return when (exception) {
-            UnsupportedCodec -> "Unsupported Codec"
-            UnsupportedContainer -> "Unsupported Container"
-            NetworkError -> "Network Error"
-            InvalidUrl -> "Invalid URL"
-            YtDlpResolutionError -> "Resolution Failed"
-            DecoderInitializationError -> "Decoder Error"
-            DrmProtectedStream -> "DRM Protected"
-            InvalidHlsPlaylist -> "Invalid Playlist"
-            InvalidDashManifest -> "Invalid Manifest"
-            AudioDecoderFailure -> "Audio Decoder Failure"
-            VideoDecoderFailure -> "Video Decoder Failure"
-            else -> "Playback Error"
-        }
+    fun getErrorTitle(exception: PlaybackException): String = when (exception.code) {
+        UnsupportedCodec.code -> "Unsupported Codec"
+        UnsupportedContainer.code -> "Unsupported Container"
+        NetworkError.code -> "Network Error"
+        InvalidUrl.code -> "Invalid URL"
+        YtDlpResolutionError.code -> "Resolution Failed"
+        DecoderInitializationError.code -> "Decoder Error"
+        DrmProtectedStream.code -> "DRM Protected"
+        InvalidHlsPlaylist.code -> "Invalid Playlist"
+        InvalidDashManifest.code -> "Invalid Manifest"
+        AudioDecoderFailure.code -> "Audio Decoder Failure"
+        VideoDecoderFailure.code -> "Video Decoder Failure"
+        SubtitleFailure.code -> "Subtitle Error"
+        SourceNotFound.code -> "Not Found"
+        Timeout.code -> "Timed Out"
+        else -> "Playback Error"
     }
 
     /** Get retryability status. */
-    fun isRetryable(exception: PlaybackException): Boolean {
-        return exception.retryable
+    fun isRetryable(exception: PlaybackException): Boolean = exception.retryable
+
+    /**
+     * Render the error for a log line or a dialog body: what happened, the
+     * underlying detail, and what the user can do about it.
+     */
+    fun formatForLog(exception: PlaybackException): String = buildString {
+        append("ERROR [").append(exception.code).append("]: ").appendLine(exception.userMessage)
+        exception.detail?.let { appendLine("DETAIL: $it") }
+        append("SOLUTION: ").append(exception.possibleSolution)
     }
 }

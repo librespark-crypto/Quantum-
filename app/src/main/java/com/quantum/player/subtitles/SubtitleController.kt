@@ -1,89 +1,87 @@
 package com.quantum.player.subtitles
 
-import androidx.compose.foundation.text.SelectableText
-import androidx.compose.foundation.ui.isTextFieldEditor
-import androidx.compose.material3.TextStyle
-import androidx.compose.runtime.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip.*
-import androidx.compose.ui.text.*
-import androidx.compose.ui.text.annotation.*
-import androidx.compose.ui.text.font.*
-import androidx.compose.ui.text.style.*
-import com.quantum.player.core.SubtitleController
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.quantum.player.core.SubtitleStyle
-import com.quantum.player.model.SubtitleTrackInfo
 
 /**
- * Implementation of SubtitleController for Compose UI.
- * Handles subtitle loading, track selection, styling, and timing.
+ * Subtitle rendering for the Compose player.
+ *
+ * The player publishes decoded cues through `PlaybackEngine.cuesFlow`; this file
+ * turns them into styled text using [SubtitleStyle].
+ *
+ * The previous `ComposeSubtitleController` in this file claimed to implement
+ * `com.quantum.player.core.SubtitleController` but overrode members that the
+ * interface does not declare (`getAvailableTracks`, `getDelay`, `getStyle`) and
+ * imported classes that do not exist (`androidx.compose.foundation.text.SelectableText`,
+ * `androidx.compose.foundation.ui.isTextFieldEditor`,
+ * `androidx.compose.ui.draw.clip.*`, `androidx.compose.ui.text.annotation.*`).
+ * `core.SubtitleController` remains the backend-agnostic contract; it is
+ * implemented by a backend, not by a Composable.
  */
-class ComposeSubtitleController : SubtitleController {
-
-    /** Current track index */
-    @Volatile
-    var currentTrackIndex: Int = -1
-
-    /** Available subtitle tracks flow */
-    private val _availableTracks = MutableStateFlow<List<SubtitleTrackInfo>>(emptyList())
-    val availableTracks: Flow<List<SubtitleTrackInfo>> = _availableTracks.asFlow()
-
-    /** Subtitle display text */
-    @Volatile
-    var subtitleText: String? = null
-
-    /** Subtitle delay in milliseconds */
-    @Volatile
-    var subtitleDelay: Long = 0
-
-    /** Subtitle styling */
-    @Volatile
-    var subtitleStyle: SubtitleStyle = SubtitleStyle()
-
-    /** Get available subtitle tracks */
-    override suspend fun getAvailableTracks(): Flow<List<SubtitleTrackInfo>> {
-        _availableTracks.asFlow()
-    }
-
-    /** Set current track by index */
-    override suspend fun selectTrack(index: Int) {
-        currentTrackIndex = index
-        // Load subtitles for the selected track
-    }
-
-    /** Toggle subtitle on/off */
-    override suspend fun toggleSubtitle() {
-        if (currentTrackIndex >= 0) {
-            currentTrackIndex = if (currentTrackIndex >= 0) -1 else currentTrackIndex
-        } else {
-            currentTrackIndex = 0
+@Composable
+fun SubtitleOverlay(
+    cues: List<String>,
+    style: SubtitleStyle = SubtitleStyle(),
+    bottomPaddingDp: Float = 96f,
+    modifier: Modifier = Modifier
+) {
+    if (cues.isEmpty()) return
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 24.dp,
+                    end = 24.dp,
+                    bottom = bottomPaddingDp.dp
+                ),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            cues.forEach { cue ->
+                Text(
+                    text = cue,
+                    style = style.toTextStyle(),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .background(style.backgroundColorValue().copy(alpha = style.backgroundOpacity))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
         }
     }
-
-    /** Set subtitle delay */
-    override suspend fun setDelay(delayMs: Long) {
-        subtitleDelay = delayMs
-    }
-
-    /** Get subtitle delay */
-    override val getDelay: Long get() = subtitleDelay
-
-    /** Set subtitle styling */
-    override suspend fun setStyle(style: SubtitleStyle) {
-        subtitleStyle = style
-    }
-
-    /** Get subtitle styling */
-    override val getStyle: SubtitleStyle get() = subtitleStyle
-
-    /** Refresh subtitle display */
-    override fun refresh() {
-        // Re-render subtitles with current settings
-    }
-
-    /** Load external subtitle file */
-    suspend fun loadExternalSubtitle(filePath: String, language: String?) {
-        // Load and parse SRT, ASS, VTT, or TTML subtitle file
-        // Update available tracks and current track
-    }
 }
+
+/** Build the [TextStyle] described by [SubtitleStyle]. */
+fun SubtitleStyle.toTextStyle(): TextStyle = TextStyle(
+    color = parseColor(fontColor, Color.White),
+    fontSize = fontSize.sp,
+    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+    fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal
+)
+
+/** Parse `#RRGGBB` / `#AARRGGBB`, falling back to [fallback] on bad input. */
+fun parseColor(value: String, fallback: Color): Color = runCatching {
+    Color(android.graphics.Color.parseColor(if (value.startsWith("#")) value else "#$value"))
+}.getOrDefault(fallback)
+
+/** Background colour for a subtitle box. */
+fun SubtitleStyle.backgroundColorValue(): Color = parseColor(backgroundColor, Color.Black)

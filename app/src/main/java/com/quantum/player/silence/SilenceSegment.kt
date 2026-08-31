@@ -1,6 +1,13 @@
 package com.quantum.player.silence
 
-import kotlin.math.abs
+import kotlin.math.sqrt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Represents a segment of audio that is either speech or silence.
@@ -11,7 +18,9 @@ data class SilenceSegment(
     val isSilence: Boolean,
     val confidence: Float = 1.0f,
     val rmsEnergy: Float = 0.0f
-)
+) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
+}
 
 /**
  * Result of audio silence analysis containing speech/silence segments.
@@ -21,10 +30,18 @@ data class SilenceAnalysisResult(
     val totalDurationMs: Long,
     val analysisQuality: Float = 1.0f,
     val analysisTimeMs: Long = 0
-)
+) {
+    /** Silence segments only, in playback order. */
+    val silences: List<SilenceSegment> get() = segments.filter { it.isSilence }
+
+    /** Total milliseconds of detected silence. */
+    val totalSilenceMs: Long get() = silences.sumOf { it.durationMs }
+}
 
 /**
  * Configuration for the silence analyzer.
+ *
+ * [chunkSize] is a size in **bytes**, not samples.
  */
 data class SilenceAnalyzerConfig(
     val amplitudeThreshold: Float = 0.02f,
@@ -32,266 +49,357 @@ data class SilenceAnalyzerConfig(
     val minSpeechDurationMs: Long = 300,
     val hysteresis: Float = 0.1f,
     val sampleRate: Int = 44100,
-    val chunkSize: Int = 1024
-)
+    val chunkSize: Int = 4096,
+    val sampleFormat: SampleFormat = SampleFormat.PCM_16BIT_LE,
+    val channelCount: Int = 2
+) {
+    /** Bytes per single sample frame (all channels). */
+    val frameSize: Int get() = sampleFormat.bytesPerSample * channelCount.coerceAtLeast(1)
+
+    /** Duration of one analysis chunk. */
+    val chunkDurationMs: Long
+        get() = (chunkSize.toLong() / frameSize.coerceAtLeast(1)) * 1000L / sampleRate.coerceAtLeast(1)
+
+    init {
+        require(amplitudeThreshold > 0f) { "amplitudeThreshold must be > 0" }
+        require(sampleRate > 0) { "sampleRate must be > 0" }
+        require(chunkSize > 0) { "chunkSize must be > 0" }
+        require(minSilenceDurationMs >= 0) { "minSilenceDurationMs must be >= 0" }
+        require(minSpeechDurationMs >= 0) { "minSpeechDurationMs must be >= 0" }
+    }
+}
+
+/** PCM layouts the analyzer can read. */
+enum class SampleFormat(val bytesPerSample: Int) {
+    /** Unsigned 8-bit, the WAV "8-bit PCM" layout. */
+    PCM_8BIT(1),
+
+    /** Signed 16-bit little endian, what Media3's audio pipeline produces. */
+    PCM_16BIT_LE(2)
+}
 
 /**
- * Analyzer that detects silence in audio streams using amplitude threshold.
+ * Analyzer that detects silence in audio streams using an amplitude threshold.
  * Performs analysis off the main thread and caches results per media item.
  */
 class SilenceAnalyzer(private val config: SilenceAnalyzerConfig = SilenceAnalyzerConfig()) {
 
-    /** Cache for analysis results per media item URI */
+    /** Cache for analysis results per media item URI. */
     private val analysisCache = mutableMapOf<String, SilenceAnalysisResult>()
 
+    /** Number of results currently cached. */
+    val cacheSize: Int get() = analysisCache.size
+
+    /** Drop all cached results. */
+    fun clearCache() {
+        synchronized(analysisCache) { analysisCache.clear() }
+    }
+
     /**
-     * Analyze audio stream for silence segments.
-     * Returns a SilenceAnalysisResult with speech/silence segments.
-     * Performs analysis off the main thread.
+     * Analyze audio for silence segments.
+     *
+     * @param audioData raw PCM samples in [SilenceAnalyzerConfig.sampleFormat]
+     * @param uri cache key for the media item
+     * @return speech/silence segments covering the analysed range
      */
     suspend fun analyze(audioData: ByteArray, uri: String): SilenceAnalysisResult {
-        // Check cache first
-        if (analysisCache.containsKey(uri)) {
-            return analysisCache[uri]!!
+        synchronized(analysisCache) {
+            analysisCache[uri]?.let { return it }
         }
 
-        return withContext(Dispatchers.Default) {
-            val segments = mutableListOf<SilenceSegment>()
-            val sampleRate = config.sampleRate
-            val chunkSize = config.chunkSize
+        val startedAt = System.nanoTime()
+        val result = withContext(Dispatchers.Default) {
+            buildResult(audioData, System.nanoTime() - startedAt)
+        }
+        synchronized(analysisCache) { analysisCache[uri] = result }
+        return result
+    }
 
-            // Process audio chunks
-            val numChunks = audioData.size / chunkSize
-            for (i in 0 until numChunks) {
-                val chunk = audioData.sliceArray(
-                    i * chunkSize until min((i + 1) * chunkSize, audioData.size)
-                )
-                val rms = calculateRMS(chunk)
-                val isSilence = rms < config.amplitudeThreshold
+    private suspend fun buildResult(
+        audioData: ByteArray,
+        elapsedNanos: Long
+    ): SilenceAnalysisResult {
+        val frameSize = config.frameSize.coerceAtLeast(1)
+        val chunkFrames = (config.chunkSize / frameSize).coerceAtLeast(1)
+        val chunkBytes = chunkFrames * frameSize
 
-                val startMs = i * chunkSize.toLong() * 1000 / sampleRate
-                val endMs = startMs + chunkSize.toLong() * 1000 / sampleRate
-
-                segments.add(SilenceSegment(startMs, endMs, isSilence, rms = rms))
-            }
-
-            // Apply hysteresis/debounce to merge adjacent silence segments
-            val filteredSegments = applyHysteresis(segments)
-
-            val result = SilenceAnalysisResult(
-                segments = filteredSegments,
-                totalDurationMs = audioData.size.toLong() * 1000 / sampleRate,
-                analysisQuality = calculateAnalysisQuality(filteredSegments)
+        val chunks = mutableListOf<SilenceSegment>()
+        var offset = 0
+        var index = 0
+        while (offset < audioData.size) {
+            currentCoroutineContext().ensureActive()
+            val end = minOf(offset + chunkBytes, audioData.size)
+            val rms = calculateRms(audioData, offset, end)
+            val startMs = framesToMs(index.toLong() * chunkFrames)
+            val finishMs = framesToMs(
+                index.toLong() * chunkFrames + ((end - offset) / frameSize).toLong()
             )
-
-            // Cache result
-            analysisCache[uri] = result
-            result
-        }
-    }
-
-    /**
-     * Calculate RMS (Root Mean Square) energy of audio chunk.
-     */
-    private fun calculateRMS(chunk: ByteArray): Float {
-        var sum: Float = 0f
-        var count = 0
-
-        for (i in chunk.indices) {
-            val sample = when {
-                chunk[i] >= 0 -> chunk[i].toFloat() / 128f
-                else -> (chunk[i] + 256).toFloat() / 128f
-            }
-            sum += sample * sample
-            count++
+            chunks.add(
+                SilenceSegment(
+                    startMs = startMs,
+                    endMs = finishMs,
+                    isSilence = rms < config.amplitudeThreshold,
+                    rmsEnergy = rms
+                )
+            )
+            offset = end
+            index++
         }
 
-        return if (count > 0) sqrt(sum / count) else 0f
-    }
-
-    /**
-     * Apply hysteresis to merge adjacent silence segments.
-     * Prevents rapid toggling between speech and silence.
-     */
-    private fun applyHysteresis(segments: List<SilenceSegment>): List<SilenceSegment> {
-        if (segments.isEmpty()) return segments
-
-        val result = mutableListOf<SilenceSegment>()
-        var currentSilenceStart: Long? = null
-        var currentSpeechStart: Long? = null
-
-        // Sort segments by start time
-        val sorted = segments.sortedBy { it.startMs }
-
-        for (segment in sorted) {
-            if (segment.isSilence) {
-                // If we were in speech, end the speech segment
-                if (currentSpeechStart != null) {
-                    result.add(SilenceSegment(currentSpeechStart!!, segment.startMs, false))
-                    currentSpeechStart = null
-                }
-                // Start or extend silence segment
-                if (currentSilenceStart == null) {
-                    currentSilenceStart = segment.startMs
-                }
-                // Otherwise, just extend (the segment will be added at end or merged)
+        val totalDurationMs = framesToMs((audioData.size / frameSize).toLong())
+        val merged = applyHysteresis(chunks)
+        val coveredMs = merged.sumOf { it.durationMs }
+        return SilenceAnalysisResult(
+            segments = merged,
+            totalDurationMs = totalDurationMs,
+            analysisQuality = if (totalDurationMs > 0) {
+                (coveredMs.toFloat() / totalDurationMs.toFloat()).coerceIn(0f, 1f)
             } else {
-                // If we were in silence and it's long enough, keep it
-                if (currentSilenceStart != null) {
-                    val silenceDuration = segment.startMs - currentSilenceStart!!
-                    if (silenceDuration >= config.minSilenceDurationMs) {
-                        result.add(SilenceSegment(currentSilenceStart, segment.startMs, true))
-                    }
-                    currentSilenceStart = null
+                0f
+            },
+            analysisTimeMs = elapsedNanos / 1_000_000L
+        )
+    }
+
+    private fun framesToMs(frames: Long): Long =
+        frames * 1000L / config.sampleRate.toLong()
+
+    /**
+     * RMS energy of a byte range, normalised to 0..1.
+     *
+     * The previous implementation treated every byte as an independent sample and
+     * mapped negatives with `(b + 256) / 128`, which produced values above 1.0
+     * and ignored the sample width entirely.
+     */
+    internal fun calculateRms(data: ByteArray, from: Int, to: Int): Float {
+        val frameSize = config.frameSize.coerceAtLeast(1)
+        var sumSquares = 0.0
+        var samples = 0
+        var cursor = from
+        while (cursor + frameSize <= to) {
+            when (config.sampleFormat) {
+                SampleFormat.PCM_8BIT -> {
+                    // WAV 8-bit PCM is unsigned with 128 as the silence point.
+                    val value = ((data[cursor].toInt() and 0xFF) - 128) / 128.0
+                    sumSquares += value * value
+                    samples++
                 }
-                // Start speech segment
-                if (currentSpeechStart == null) {
-                    currentSpeechStart = segment.startMs
+
+                SampleFormat.PCM_16BIT_LE -> {
+                    // Interleaved channels: average the frame's channels.
+                    var frameValue = 0.0
+                    for (channel in 0 until config.channelCount.coerceAtLeast(1)) {
+                        val byteIndex = cursor + channel * SampleFormat.PCM_16BIT_LE.bytesPerSample
+                        if (byteIndex + 1 >= to) break
+                        val low = data[byteIndex].toInt() and 0xFF
+                        val high = data[byteIndex + 1].toInt()
+                        frameValue += ((high shl 8) or low).toShort().toDouble() / 32768.0
+                    }
+                    frameValue /= config.channelCount.coerceAtLeast(1)
+                    sumSquares += frameValue * frameValue
+                    samples++
                 }
             }
+            cursor += frameSize
         }
+        return if (samples > 0) sqrt(sumSquares / samples).toFloat() else 0f
+    }
 
-        // Handle remaining segments
-        if (currentSilenceStart != null) {
-            // Get the last segment end
-            val lastEnd = sorted.lastOrNull()?.endMs ?: currentSilenceStart
-            result.add(SilenceSegment(currentSilenceStart, lastEnd, true))
-        }
-        if (currentSpeechStart != null) {
-            val lastEnd = sorted.lastOrNull()?.endMs ?: currentSpeechStart
-            result.add(SilenceSegment(currentSpeechStart, lastEnd, false))
-        }
+    /**
+     * Merge adjacent chunks with the same classification, then remove runs that
+     * are too short to be real: a silence shorter than [minSilenceDurationMs] is
+     * noise, and a speech burst shorter than [minSpeechDurationMs] inside silence
+     * is a click. Both are folded into their neighbours.
+     */
+    internal fun applyHysteresis(chunks: List<SilenceSegment>): List<SilenceSegment> {
+        if (chunks.isEmpty()) return emptyList()
 
+        val sorted = chunks.sortedBy { it.startMs }
+        var runs = collapse(sorted)
+
+        // Folding one run can make its neighbour short; iterate until stable.
+        var guard = 0
+        while (guard++ < MAX_HYSTERESIS_PASSES) {
+            val before = runs
+            runs = collapse(foldShortRuns(runs))
+            if (runs == before) break
+        }
+        return runs
+    }
+
+    /** Combine consecutive chunks that share a classification. */
+    private fun collapse(sorted: List<SilenceSegment>): List<SilenceSegment> {
+        val result = mutableListOf<SilenceSegment>()
+        var current: SilenceSegment? = null
+        for (chunk in sorted) {
+            val active = current
+            if (active != null && active.isSilence == chunk.isSilence) {
+                current = active.copy(
+                    endMs = maxOf(active.endMs, chunk.endMs),
+                    rmsEnergy = (active.rmsEnergy + chunk.rmsEnergy) / 2f
+                )
+            } else {
+                active?.let { result.add(it) }
+                current = chunk
+            }
+        }
+        current?.let { result.add(it) }
         return result
     }
 
     /**
-     * Calculate analysis quality based on segment distribution.
+     * Replace runs below the configured minimums with the surrounding state:
+     * a short silence between two speech runs becomes speech, and a short speech
+     * blip between two silences becomes silence.
      */
-    private fun calculateAnalysisQuality(segments: List<SilenceSegment>): Float {
-        if (segments.isEmpty()) return 1.0f
-        val silenceCount = segments.count { it.isSilence }
-        val total = segments.size
-        return if (total > 0) (silenceCount.toFloat() / total) else 1.0f
+    private fun foldShortRuns(runs: List<SilenceSegment>): List<SilenceSegment> {
+        if (runs.size < 3) return runs
+        val out = runs.toMutableList()
+        var changed = true
+        while (changed) {
+            changed = false
+            var i = 1
+            while (i < out.size - 1) {
+                val run = out[i]
+                val tooShort = if (run.isSilence) {
+                    run.durationMs < config.minSilenceDurationMs
+                } else {
+                    run.durationMs < config.minSpeechDurationMs
+                }
+                val previous = out[i - 1]
+                val next = out[i + 1]
+                if (tooShort && previous.isSilence == next.isSilence) {
+                    out[i - 1] = previous.copy(endMs = run.endMs)
+                    out.removeAt(i)
+                    changed = true
+                    // Do not advance: the run now at index i may also be short.
+                } else {
+                    i++
+                }
+            }
+        }
+        return out
+    }
+
+    private companion object {
+        const val MAX_HYSTERESIS_PASSES = 8
     }
 }
 
 /**
  * Controller for skip silence functionality.
  * Automatically seeks across detected silence during playback.
+ *
+ * Analysis is cancellable: [close] (called when the player is released) stops
+ * any in-flight analysis so it cannot outlive the session.
  */
 class SkipSilenceController(
     private val config: SilenceAnalyzerConfig = SilenceAnalyzerConfig(),
-    private val analyzer: SilenceAnalyzer = SilenceAnalyzer()
+    private val analyzer: SilenceAnalyzer = SilenceAnalyzer(config),
+    private val scope: CoroutineScope? = null
 ) : AutoCloseable {
 
-    /** Whether skip silence is enabled */
+    /** Whether skip silence is enabled. */
+    @Volatile
     var isEnabled: Boolean = false
+        set(value) {
+            field = value
+            if (!value) analysisJob?.cancel()
+        }
 
-    /** Current analysis result */
+    /** Current analysis result, null until analysis completes. */
+    @Volatile
     private var currentResult: SilenceAnalysisResult? = null
 
-    /** Prevent repeated skip loops */
+    /** Silence segment ends we have already jumped to, to stop seek loops. */
     private val skippedPositions = mutableSetOf<Long>()
 
+    private var analysisJob: Job? = null
+
+    /** True while an analysis is running. */
+    val isAnalyzing: Boolean get() = analysisJob?.isActive == true
+
     /**
-     * Process a media item for silence analysis.
-     * Returns the analysis result or null if analysis is not possible.
+     * Analyse [uri] and make the result available to the seek helpers.
+     * Returns null when analysis is disabled, no audio data is available, or
+     * the analysis failed - in the failure case the controller disables itself
+     * rather than silently skipping nothing.
      */
     suspend fun processMedia(uri: String, audioData: ByteArray?): SilenceAnalysisResult? {
-        if (!isEnabled || audioData == null) return null
-
+        if (!isEnabled || audioData == null || audioData.isEmpty()) return null
         return try {
-            analyzer.analyze(audioData, uri)
+            analyzer.analyze(audioData, uri).also { currentResult = it }
         } catch (e: Exception) {
-            // Gracefully disable for streams where analysis is impossible
+            // Analysis is impossible for this source (e.g. an encrypted stream).
             isEnabled = false
+            currentResult = null
             null
         }
     }
 
+    /** Start analysis on the controller's scope without suspending the caller. */
+    fun processMediaAsync(uri: String, audioData: ByteArray?): Job? {
+        val owned = scope ?: return null
+        if (!isEnabled || audioData == null || audioData.isEmpty()) return null
+        analysisJob?.cancel()
+        // `this` inside a launch block is the CoroutineScope, not the Job, so the
+        // handle has to be taken from the returned Job instead.
+        val job = owned.launch { processMedia(uri, audioData) }
+        analysisJob = job
+        return job
+    }
+
     /**
-     * Get the next speech segment after a given position.
-     * Used to seek across silence.
+     * Get the next speech position after [currentPosition], or null when the
+     * player is not inside a silence region.
      */
     fun getNextSpeechPosition(currentPosition: Long): Long? {
-        if (currentResult == null) return null
-
-        for (segment in currentResult.segments) {
-            if (!segment.isSilence && segment.startMs > currentPosition) {
-                return segment.startMs
-            }
-        }
-        return null
+        val result = currentResult ?: return null
+        val active = result.silences.firstOrNull { currentPosition in it.startMs until it.endMs }
+            ?: return null
+        return active.endMs.takeIf { it > currentPosition }
     }
 
-    /**
-     * Get the end of a silence segment starting from a position.
-     * Seeks from currentPosition to end of silence.
-     */
-    fun getSilenceEndPosition(currentPosition: Long): Long? {
-        if (currentResult == null) return null
+    /** End of the silence region containing [currentPosition]. */
+    fun getSilenceEndPosition(currentPosition: Long): Long? =
+        getNextSpeechPosition(currentPosition)
 
-        for (segment in currentResult.segments) {
-            if (segment.isSilence && segment.startMs <= currentPosition && currentPosition < segment.endMs) {
-                return segment.endMs
-            }
-        }
-        return null
+    /**
+     * Decide whether playback should jump from [currentPosition].
+     *
+     * Returns the seek target, or null to keep playing normally. A target that
+     * has already been used is not returned again, which is what stops the
+     * player from bouncing over the same silent gap forever.
+     */
+    fun skipTargetFor(currentPosition: Long): Long? {
+        if (!isEnabled) return null
+        val target = getNextSpeechPosition(currentPosition) ?: return null
+        if (isPositionSkipped(target)) return null
+        return target
     }
 
-    /**
-     * Check if position is within a silence segment.
-     */
-    fun isPositionInSilence(currentPosition: Long): Boolean {
-        if (currentResult == null) return false
-
-        return currentResult.segments.any {
-            it.isSilence && it.startMs <= currentPosition && currentPosition < it.endMs
-        }
-    }
-
-    /**
-     * Mark a position as skipped to prevent repeated loops.
-     */
-    fun markSkipped(position: Long) {
+    /** Record that a jump to [position] actually happened. */
+    fun onSeekPerformed(position: Long) {
         skippedPositions.add(position)
     }
 
-    /**
-     * Check if a position has been recently skipped.
-     */
-    fun isPositionSkipped(position: Long): Boolean {
-        return skippedPositions.contains(position)
+    /** True when [position] has already been skipped to. */
+    fun isPositionSkipped(position: Long): Boolean = skippedPositions.contains(position)
+
+    /** Forget the analysis for the current item (call on media change). */
+    fun reset() {
+        analysisJob?.cancel()
+        analysisJob = null
+        currentResult = null
+        skippedPositions.clear()
     }
 
-    /**
-     * Get the optimal skip position across silence.
-     * Returns the start of the next speech segment after current position.
-     */
-    fun getOptimalSkipPosition(currentPosition: Long): Long? {
-        if (!isEnabled || currentResult == null) return null
-
-        // Find next speech after current position
-        val nextSpeech = getNextSpeechPosition(currentPosition)
-
-        if (nextSpeech != null) {
-            // Check if we'd be jumping over silence
-            val silenceEnd = getSilenceEndPosition(currentPosition)
-            if (silenceEnd != null && nextSpeech > silenceEnd) {
-                // Avoid skipping if it would cause loop
-                if (!isPositionSkipped(nextSpeech)) {
-                    return nextSpeech
-                }
-            }
-        }
-
-        return null
-    }
-
+    /** Cancel analysis and release everything held for this session. */
     override fun close() {
+        analysisJob?.cancel()
+        analysisJob = null
         isEnabled = false
-        analyzer.analysisCache.clear()
+        analyzer.clearCache()
         skippedPositions.clear()
         currentResult = null
     }
