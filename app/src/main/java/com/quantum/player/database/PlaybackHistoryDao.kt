@@ -244,16 +244,16 @@ interface RecentFilesDao {
     fun loadRecent(): Flow<List<RecentFileEntity>>
 
     /** Update access count. */
-    @Query("UPDATE recent_files SET last_accessed = :timestamp, access_count = access_count + 1 WHERE file_path = :filePath")
-    suspend fun updateAccess(filePath: String, timestamp: Long)
+    @Query("UPDATE recent_files SET last_accessed = :timestamp, access_count = access_count + 1 WHERE file_path = :path")
+    suspend fun updateAccess(path: String, timestamp: Long)
 
     /** Remove recent file. */
-    @Query("DELETE FROM recent_files WHERE file_path = :filePath")
-    suspend fun removeRecentFile(filePath: String)
+    @Query("DELETE FROM recent_files WHERE file_path = :path")
+    suspend fun removeRecentFile(path: String)
 
     /** Check if file is in recent list. */
-    @Query("SELECT EXISTS(SELECT 1 FROM recent_files WHERE file_path = :filePath)")
-    suspend fun exists(filePath: String): Boolean
+    @Query("SELECT EXISTS(SELECT 1 FROM recent_files WHERE file_path = :path)")
+    suspend fun exists(path: String): Boolean
 }
 
 @Dao
