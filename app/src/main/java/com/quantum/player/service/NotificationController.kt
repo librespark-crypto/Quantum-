@@ -36,7 +36,32 @@ class NotificationController(private val context: Context) {
     ): Notification {
         createChannelIfNeeded()
 
-        val contentIntent = PendingIntent.getActivity(
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(mediaItem.displayName)
+            .setContentText(formatContentText(positionMs, durationMs))
+            .setSmallIcon(R.drawable.ic_stat_playback)
+            .setSubText(if (isPlaying) context.getString(R.string.play) else context.getString(R.string.pause))
+            .setShowWhen(false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setContentIntent(createContentIntent())
+            .addPlaybackActions(isPlaying)
+            .build()
+    }
+
+    private fun formatContentText(positionMs: Long, durationMs: Long): String {
+        return if (durationMs > 0) {
+            "${formatPosition(positionMs)} / ${formatPosition(durationMs)}"
+        } else {
+            formatPosition(positionMs)
+        }
+    }
+
+    private fun createContentIntent(): PendingIntent {
+        return PendingIntent.getActivity(
             context,
             REQUEST_CONTENT,
             Intent(context, QuantumPlayerActivity::class.java).apply {
@@ -46,46 +71,30 @@ class NotificationController(private val context: Context) {
             },
             immutableFlags(PendingIntent.FLAG_UPDATE_CURRENT)
         )
+    }
 
-        return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(mediaItem.displayName)
-            .setContentText(
-                if (durationMs > 0) {
-                    "${formatPosition(positionMs)} / ${formatPosition(durationMs)}"
-                } else {
-                    formatPosition(positionMs)
-                }
-            )
-            .setSmallIcon(R.drawable.ic_stat_playback)
-            .setSubText(if (isPlaying) context.getString(R.string.play) else context.getString(R.string.pause))
-            .setShowWhen(false)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setContentIntent(contentIntent)
-            .addAction(
-                android.R.drawable.ic_media_rew,
-                context.getString(R.string.backward_10),
-                serviceAction(QuantumBackgroundService.ACTION_SEEK_BACK, REQUEST_SEEK_BACK)
-            )
-            .addAction(
-                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                if (isPlaying) context.getString(R.string.pause) else context.getString(R.string.play),
-                serviceAction(QuantumBackgroundService.ACTION_TOGGLE_PLAY, REQUEST_TOGGLE)
-            )
-            .addAction(
-                android.R.drawable.ic_media_ff,
-                context.getString(R.string.forward_10),
-                serviceAction(QuantumBackgroundService.ACTION_SEEK_FORWARD, REQUEST_SEEK_FORWARD)
-            )
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                context.getString(R.string.stop),
-                serviceAction(QuantumBackgroundService.ACTION_STOP, REQUEST_STOP)
-            )
-            .build()
+    private fun NotificationCompat.Builder.addPlaybackActions(isPlaying: Boolean): NotificationCompat.Builder {
+        addAction(
+            android.R.drawable.ic_media_rew,
+            context.getString(R.string.backward_10),
+            serviceAction(QuantumBackgroundService.ACTION_SEEK_BACK, REQUEST_SEEK_BACK)
+        )
+        addAction(
+            if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            if (isPlaying) context.getString(R.string.pause) else context.getString(R.string.play),
+            serviceAction(QuantumBackgroundService.ACTION_TOGGLE_PLAY, REQUEST_TOGGLE)
+        )
+        addAction(
+            android.R.drawable.ic_media_ff,
+            context.getString(R.string.forward_10),
+            serviceAction(QuantumBackgroundService.ACTION_SEEK_FORWARD, REQUEST_SEEK_FORWARD)
+        )
+        addAction(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            context.getString(R.string.stop),
+            serviceAction(QuantumBackgroundService.ACTION_STOP, REQUEST_STOP)
+        )
+        return this
     }
 
     /** Post or refresh the notification. */
