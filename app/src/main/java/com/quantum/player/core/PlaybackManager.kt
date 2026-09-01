@@ -459,10 +459,10 @@ class PlaybackManager(context: Context) : PlaybackEngine {
                         ?: "${format.width}x${format.height}".takeIf { format.width > 0 }
                         ?: "Track ${index + 1}",
                     codec = format.sampleMimeType,
-                    profile = format.profile.takeUnless { it == Format.NO_VALUE }?.toString(),
-                    level = format.level.takeUnless { it == Format.NO_VALUE }?.toString(),
-                    width = format.width.takeUnless { it == Format.NO_VALUE } ?: 0,
-                    height = format.height.takeUnless { it == Format.NO_VALUE } ?: 0,
+                    profile = null,
+                    level = null,
+                    width = format.width.takeUnless { w -> w == Format.NO_VALUE } ?: 0,
+                    height = format.height.takeUnless { h -> h == Format.NO_VALUE } ?: 0,
                     bitDepth = null
                 )
             }
