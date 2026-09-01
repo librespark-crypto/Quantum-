@@ -19,12 +19,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.SkipNext
-import androidx.compose.material.icons.automirrored.filled.SkipPrevious
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.InfoOutlined
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -129,6 +129,7 @@ fun PlayerHud(
             onAudioClick = onAudioClick,
             onSubtitleClick = onSubtitleClick,
             onToggleDecoder = onToggleDecoder,
+            onInfoClick = onInfoClick,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -196,6 +197,7 @@ private fun TopAppBarLayer(
     onAudioClick: () -> Unit,
     onSubtitleClick: () -> Unit,
     onToggleDecoder: () -> Unit,
+    onInfoClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -221,7 +223,7 @@ private fun TopAppBarLayer(
         HudIconButton(icon = Icons.Filled.Subtitles,
             contentDescription = "Subtitles", onClick = onSubtitleClick)
         // Media / decoder info (direct sheet, not a settings screen)
-        HudIconButton(icon = Icons.Filled.InfoOutlined,
+        HudIconButton(icon = Icons.Outlined.Info,
             contentDescription = "Media info", onClick = onInfoClick)
         // HW/SW decoder badge: instant toggle on tap
         DecoderBadge(mode = decoderMode, onClick = onToggleDecoder)
@@ -457,7 +459,7 @@ private fun BottomControls(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 HudIconButton(
-                    icon = Icons.AutoMirrored.Filled.SkipPrevious,
+                    icon = Icons.Filled.SkipPrevious,
                     contentDescription = "Previous video",
                     onClick = onPrevious,
                     size = 34
@@ -480,7 +482,7 @@ private fun BottomControls(
                 }
                 Spacer(Modifier.width(20.dp))
                 HudIconButton(
-                    icon = Icons.AutoMirrored.Filled.SkipNext,
+                    icon = Icons.Filled.SkipNext,
                     contentDescription = "Next video",
                     onClick = onNext,
                     size = 34

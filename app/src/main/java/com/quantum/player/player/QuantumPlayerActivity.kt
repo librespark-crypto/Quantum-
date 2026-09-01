@@ -2,6 +2,7 @@ package com.quantum.player.player
 
 import android.Manifest
 import android.content.Intent
+import kotlinx.coroutines.flow.first
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
@@ -53,7 +54,7 @@ class QuantumPlayerActivity : ComponentActivity() {
     private val engine: PlaybackEngine
         get() = (application as QuantumApplication).playbackEngine
 
-    private var pipHandler: QuantumPiPHandler? = null
+    private val pipHandler by lazy { QuantumPiPHandler(this, engine) }
 
     private var currentItem by mutableStateOf<MediaItem?>(null)
     private var playlist by mutableStateOf<List<MediaItem>>(emptyList())
@@ -65,8 +66,7 @@ class QuantumPlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pipHandler = QuantumPiPHandler(this, engine)
-        pipHandler?.restorePiPState(savedInstanceState)?.let { currentItem = it }
+        pipHandler.restorePiPState(savedInstanceState)?.let { currentItem = it }
         handleIncomingIntent(intent)
         requestNotificationPermissionIfNeeded()
 
@@ -95,7 +95,7 @@ class QuantumPlayerActivity : ComponentActivity() {
                             startPositionMs = 0L
                             reloadTick++
                         },
-                        onEnterPiP = { pipHandler?.enterPiP(item) },
+                        onEnterPiP = { pipHandler.enterPiP(item) },
                         onPlayItem = { newItem, resumeAt ->
                             currentItem = newItem
                             startPositionMs = resumeAt
@@ -190,7 +190,7 @@ class QuantumPlayerActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        currentItem?.let { pipHandler?.enterPiP(it) }
+        currentItem?.let { pipHandler.enterPiP(it) }
     }
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
@@ -200,12 +200,12 @@ class QuantumPlayerActivity : ComponentActivity() {
     ) {
         @Suppress("DEPRECATION")
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        pipHandler?.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipHandler.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        pipHandler?.savePiPState(outState)
+        pipHandler.savePiPState(outState)
         outState.putString(STATE_CURRENT_URI, currentItem?.uri.orEmpty())
         outState.putString(STATE_CURRENT_TITLE, currentItem?.title.orEmpty())
     }
@@ -221,7 +221,7 @@ class QuantumPlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        if (pipHandler?.isInPiPMode != true) {
+        if (!pipHandler.isInPiPMode) {
             engine.setVideoTextureView(null)
         }
         super.onStop()
@@ -229,7 +229,6 @@ class QuantumPlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         engine.setVideoTextureView(null)
-        pipHandler = null
         super.onDestroy()
     }
 
@@ -293,7 +292,7 @@ private fun ComponentActivity.LibraryRoute(
         onResumeLastPlayed = {
             scope.launch {
                 val last = withContext(Dispatchers.IO) {
-                    kotlinx.coroutines.flow.first(lastPlayedStore.lastPlayed)
+                    lastPlayedStore.lastPlayed.first()
                 }
                 onResumeLast(last)
             }
@@ -397,6 +396,6 @@ private fun ComponentActivity.PlayerRoute(
         onPickSubtitleFile = {
             subtitlePicker.launch(arrayOf("text/srt", "text/vtt", "application/x-subrip", "*/*"))
         },
-        showControlsInitially = pipHandler?.isInPiPMode != true
+        showControlsInitially = this.isInPictureInPictureMode != true
     )
 }

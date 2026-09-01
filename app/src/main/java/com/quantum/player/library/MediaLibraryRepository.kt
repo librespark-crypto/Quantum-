@@ -159,16 +159,16 @@ class MediaLibraryRepository(
             val node = MutableFolder(folderPath, volumeLabelFor(folderPath)
                 ?: folderPath.substringAfterLast('/').ifBlank { folderPath })
             nodes[folderPath] = node
-            if (parentPath.isBlank() || isVolumeRoot(folderPath)) {
+            if (parentDirPath.isBlank() || isVolumeRoot(folderPath)) {
                 root.children[folderPath] = node
             } else {
-                folderFor(parentPath).children[folderPath] = node
+                folderFor(parentDirPath).children[folderPath] = node
             }
             return node
         }
 
         videos.forEach { video ->
-            val dirPath = video.parentDirPath
+            val dirPath = java.io.File(video.path).parent ?: ""
             if (dirPath.isBlank()) return@forEach
             folderFor(dirPath).videos.add(video)
         }
