@@ -111,6 +111,7 @@ class YtDlpStreamResolver(
             "--no-playlist",
             "--dump-single-json",
             "--no-warnings",
+            "--",
             url
         )
         return withContext(Dispatchers.IO) {

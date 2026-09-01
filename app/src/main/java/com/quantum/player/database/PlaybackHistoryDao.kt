@@ -241,15 +241,15 @@ interface RecentFilesDao {
 
     /** Update access count. */
     @Query("UPDATE recent_files SET last_accessed = :timestamp, access_count = access_count + 1 WHERE file_path = :path")
-    suspend fun updateAccess(filePath: String, timestamp: Long)
+    suspend fun updateAccess(path: String, timestamp: Long)
 
     /** Remove recent file. */
     @Query("DELETE FROM recent_files WHERE file_path = :path")
-    suspend fun removeRecentFile(filePath: String)
+    suspend fun removeRecentFile(path: String)
 
     /** Check if file is in recent list. */
     @Query("SELECT EXISTS(SELECT 1 FROM recent_files WHERE file_path = :path)")
-    suspend fun exists(filePath: String): Boolean
+    suspend fun exists(path: String): Boolean
 }
 
 @Dao
