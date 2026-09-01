@@ -787,17 +787,14 @@ class PlaybackManager(context: Context) : PlaybackEngine {
     }
 
     private companion object {
-        const val MAX_VOLUME_BOOST = 2.0f
-        const val AudioSessionIdUnset = 0
-    }
-
-    private companion object {
-        const val USER_AGENT = "QuantumPlayer"
-        const val POSITION_UPDATE_INTERVAL_MS = 250L
-        const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
-        const val HTTP_TIMEOUT_MS = 15_000
+        const val USER_AGENT = "QuantumPlayer/1.0"
+        const val HTTP_TIMEOUT_MS = 15000
+        const val DEFAULT_SEEK_INCREMENT_MS = 10000L
+        const val POSITION_UPDATE_INTERVAL_MS = 500L
+        const val KEY_RESUME_POSITION = "resume_position"
         const val MIN_PLAYBACK_SPEED = 0.25f
         const val MAX_PLAYBACK_SPEED = 4.0f
-        const val KEY_RESUME_POSITION = "resume_position_ms"
+        const val MAX_VOLUME_BOOST = 2.0f
+        const val AudioSessionIdUnset = 0
     }
 }

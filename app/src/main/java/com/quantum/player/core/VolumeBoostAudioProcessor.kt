@@ -37,8 +37,8 @@ class VolumeBoostAudioProcessor : BaseAudioProcessor() {
 
     override fun onConfigure(inputAudioFormat: AudioFormat): AudioFormat =
         if (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT &&
-            inputAudioFormat.sampleRate != AudioFormat.NO_VALUE &&
-            inputAudioFormat.channelCount != AudioFormat.NO_VALUE
+            inputAudioFormat.sampleRate != androidx.media3.common.Format.NO_VALUE &&
+            inputAudioFormat.channelCount != androidx.media3.common.Format.NO_VALUE
         ) {
             inputAudioFormat
         } else {
