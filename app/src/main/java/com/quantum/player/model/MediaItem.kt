@@ -1,9 +1,14 @@
 package com.quantum.player.model
 
+import com.quantum.player.core.AspectRatioMode
 import java.util.UUID
 
 /**
  * Media item representing a video or audio file/stream.
+ *
+ * This is the single canonical MediaItem type for the app. A second, divergent
+ * copy used to be declared inside `core/PlaybackEngine.kt`; that duplicate was
+ * removed so that every layer speaks about the same type.
  */
 data class MediaItem(
     val id: String = UUID.randomUUID().toString(),
@@ -20,7 +25,11 @@ data class MediaItem(
     val metadata: Map<String, Any> = emptyMap(),
     val format: String? = null,
     val sizeBytes: Long = 0
-)
+) {
+    /** A stable, human readable label used by the UI and the notification. */
+    val displayName: String
+        get() = title?.takeIf { it.isNotBlank() } ?: uri.substringAfterLast('/')
+}
 
 /**
  * Subtitle information for external subtitle files.
@@ -52,7 +61,13 @@ enum class WatchState {
     Watched,
     Unwatched,
     InProgress,
-    Paused
+    Paused;
+
+    companion object {
+        /** Lenient parse: unknown values fall back to [Unwatched] instead of throwing. */
+        fun fromName(value: String?): WatchState =
+            entries.firstOrNull { it.name == value } ?: Unwatched
+    }
 }
 
 /**

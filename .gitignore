@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local SDK path (machine specific, never commit)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Native / NDK artifacts
+app/.cxx/
+*.so
+
+# Kotlin
+.kotlin/
+
+# OS
+.DS_Store
+Thumbs.db

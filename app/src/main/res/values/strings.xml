@@ -4,15 +4,15 @@
     <string name="app_name">Quantum</string>
     <string name="play">Play</string>
     <string name="pause">Pause</string>
-    <string name="skip_silence_on">Skip Silence</string>
-    <string name="skip_silence_off">Skip Silence</string>
+    <string name="skip_silence_on">Skip silence: on</string>
+    <string name="skip_silence_off">Skip silence: off</string>
     <string name="skip_silence_desc">Skip silent sections automatically</string>
     
     <!-- Playback controls -->
     <string name="previous">Previous</string>
     <string name="next">Next</string>
-    <string name="backward_5">10s back</string>
-    <string name="forward_5">10s forward</string>
+    <string name="backward_10">10s back</string>
+    <string name="forward_10">10s forward</string>
     <string name="speed">Speed</string>
     <string name="subtitle">Subtitle</string>
     <string name="audio_track">Audio Track</string>
@@ -119,3 +119,27 @@
     <!-- Theme strings -->
     <string name="material_dark">Material Dark</string>
     <string name="material_light">Material Light</string>
+    <string name="off">Off</string>
+
+    <!-- Service / notifications -->
+    <string name="stop">Stop</string>
+    <string name="notification_channel_playback">Playback</string>
+    <string name="notification_channel_playback_desc">Controls for background audio and video playback</string>
+    <string name="background_playback">Background Playback</string>
+
+    <!-- Player states and actions -->
+    <string name="close">Close</string>
+    <string name="retry">Retry</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="loading">Loading…</string>
+    <string name="no_media_selected">No media selected</string>
+    <string name="no_tracks">No tracks available</string>
+    <string name="pip_enter">Picture in picture</string>
+    <string name="enter_url">Enter a video URL</string>
+    <string name="open">Open</string>
+    <string name="videos">Videos</string>
+    <string name="browse_device">Browse device</string>
+    <string name="permission_needed">Storage permission is needed to browse the device</string>
+    <string name="screenshot_saved">Screenshot captured</string>
+    <string name="screenshot_failed">Screenshot failed</string>
+</resources>

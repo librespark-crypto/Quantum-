@@ -1,80 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base application theme. -->
-    <style name="Theme.Quantum" parent="Theme.Material.DayNight.NoActionBar">
+
+    <!--
+        Base application theme.
+
+        Parent is Theme.Material3.DayNight.NoActionBar: the previous
+        "Theme.Material.DayNight.NoActionBar" is not a real style and failed
+        resource linking. The unprefixed colorPrimary/colorSurface/... items are
+        Material 3 attributes, which is why the Material Components library is
+        on the classpath.
+    -->
+    <style name="Theme.Quantum" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Primary brand color. -->
-        <item name="colorPrimary">#0A0E17</item>
-        <item name="colorPrimaryContainer">#1A1F2E</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimary">@color/quantum_primary</item>
+        <item name="colorPrimaryContainer">@color/quantum_primary_container</item>
+        <item name="colorOnPrimary">@color/quantum_on_primary</item>
         <!-- Secondary brand color. -->
-        <item name="colorSecondary">#0066FF</item>
-        <item name="colorSecondaryContainer">#0050C9</item>
-        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="colorSecondary">@color/quantum_primary</item>
+        <item name="colorSecondaryContainer">@color/quantum_surface_variant</item>
+        <item name="colorOnSecondary">@color/quantum_on_primary</item>
         <!-- Background colors -->
-        <item name="android:colorBackground">#050810</item>
-        <item name="colorSurface">#0A0E17</item>
-        <item name="colorOnSurface">#E8E8E8</item>
+        <item name="android:colorBackground">@color/quantum_background</item>
+        <item name="colorSurface">@color/quantum_surface</item>
+        <item name="colorOnSurface">@color/quantum_on_surface</item>
+        <item name="colorSurfaceVariant">@color/quantum_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/quantum_on_surface_variant</item>
         <!-- Error color -->
-        <item name="colorError">#FF5252</item>
-        <!-- Status bar color -->
-        <item name="android:statusBarColor">#0A0E17</item>
-        <item name="android:navigationBarColor">#0A0E17</item>
+        <item name="colorError">@color/quantum_error</item>
+        <!-- System bar colors -->
+        <item name="android:statusBarColor">@color/quantum_surface</item>
+        <item name="android:navigationBarColor">@color/quantum_surface</item>
+        <item name="android:windowBackground">@color/quantum_background</item>
     </style>
 
-    <!-- PiP theme -->
-    <style name="Theme.Quantum.Pip" parent="Theme.Material.DayNight.NoActionBar">
-        <item name="android:windowIsFloating">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:disableAnimations">false</item>
-    </style>
-
-    <!-- No action bar -->
+    <!-- No action bar (declared in AndroidManifest.xml as the application theme). -->
     <style name="Theme.Quantum.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
     </style>
 
+    <!--
+        PiP theme. `android:windowIsFloating` and `android:disableAnimations`
+        were removed: the first breaks the PiP surface, the second is not a
+        real framework attribute.
+    -->
+    <style name="Theme.Quantum.Pip" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/quantum_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <!-- Toolbar style -->
-    <style name="Quantum.Toolbar" parent="Widget.Material.Toolbar">
+    <style name="Quantum.Toolbar" parent="Widget.Material3.Toolbar">
         <item name="popupTheme">@style/Theme.Quantum.Popup</item>
     </style>
 
     <!-- Popup menu style -->
-    <style name="Theme.Quantum.Popup" parent="Widget.Material.PopupMenu">
-        <item name="android:background">#1A1F2E</item>
-        <item name="android:itemTextColor">#E8E8E8</item>
+    <style name="Theme.Quantum.Popup" parent="Widget.Material3.PopupMenu">
+        <item name="android:background">@color/quantum_surface_variant</item>
+        <item name="android:textColor">@color/quantum_on_surface</item>
     </style>
 
     <!-- Card view style -->
-    <style name="Quantum.Card" parent="Widget.Material.CardView">
-        <item name="cardBackgroundColor">#1A1F2E</item>
+    <style name="Quantum.Card" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/quantum_surface_variant</item>
         <item name="cardCornerRadius">8dp</item>
     </style>
 
     <!-- Button style -->
-    <style name="Quantum.Button" parent="Widget.Material.Button">
-        <item name="android:background">?attr/colorPrimary</item>
+    <style name="Quantum.Button" parent="Widget.Material3.Button">
+        <item name="backgroundTint">?attr/colorPrimary</item>
         <item name="android:textColor">?attr/colorOnPrimary</item>
     </style>
 
-    <!-- Text styles -->
-    <style name="Quantum.Title1" parent="TextAppearance.Material3.Title1">
-        <item name="android:textColor">#E8E8E8</item>
+    <!-- Text styles (Material 3 type scale names) -->
+    <style name="Quantum.Title1" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textColor">@color/quantum_on_surface</item>
     </style>
 
-    <style name="Quantum.Title2" parent="TextAppearance.Material3.Title2">
-        <item name="android:textColor">#E8E8E8</item>
+    <style name="Quantum.Title2" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textColor">@color/quantum_on_surface</item>
     </style>
 
-    <style name="Quantum.Body1" parent="TextAppearance.Material3.Body1">
-        <item name="android:textColor">#B0B0B0</item>
+    <style name="Quantum.Body1" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textColor">@color/quantum_on_surface_variant</item>
     </style>
 
-    <style name="Quantum.Body2" parent="TextAppearance.Material3.Body2">
-        <item name="android:textColor">#B0B0B0</item>
+    <style name="Quantum.Body2" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/quantum_on_surface_variant</item>
     </style>
 
-    <style name="Quantum.Caption" parent="TextAppearance.Material3.Caption">
-        <item name="android:textColor">#666666</item>
+    <style name="Quantum.Caption" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textColor">@color/quantum_on_surface_variant</item>
     </style>
 </resources>

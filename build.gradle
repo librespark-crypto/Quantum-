@@ -1,4 +1,13 @@
+// Root build script.
+//
+// Versions are pinned deliberately and must stay in sync:
+//   Gradle 8.4        -> required by AGP 8.3.0 (see gradle/wrapper/gradle-wrapper.properties)
+//   AGP 8.3.0         -> requires JDK 17
+//   Kotlin 1.9.22     -> Compose Compiler 1.5.8 is the matching release
+//                        (Compose Compiler 1.5.0 requires Kotlin 1.9.0)
+//   KSP 1.9.22-1.0.17 -> KSP versions are prefixed with the Kotlin version they support
 plugins {
-    id 'com.android.application' version '8.3.0' apply from = './app/build.gradle'
-    id 'org.jetbrains.kotlin.android' version '1.9.22' apply from = './app/build.gradle'
+    id 'com.android.application' version '8.3.0' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+    id 'com.google.devtools.ksp' version '1.9.22-1.0.17' apply false
 }

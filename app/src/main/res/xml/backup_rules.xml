@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Pre-Android-12 backup rules. Root element must be <full-backup-content>;
+    the previous <backupRules> is not a valid element.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="." />
+    <include domain="database" path="quantum-player-db" />
+    <exclude domain="file" path="yt-dlp/" />
+    <exclude domain="external" path="." />
+</full-backup-content>
