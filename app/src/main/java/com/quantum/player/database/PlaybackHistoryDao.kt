@@ -45,6 +45,10 @@ interface PlaybackHistoryDao {
     @Query("SELECT * FROM playback_history ORDER BY last_played DESC")
     fun loadAll(): Flow<List<PlaybackHistoryEntity>>
 
+    /** One-shot snapshot of every history row (library scan, watch-state join). */
+    @Query("SELECT * FROM playback_history")
+    suspend fun loadAllOnce(): List<PlaybackHistoryEntity>
+
     /** Get history item by URI. */
     @Query("SELECT * FROM playback_history WHERE uri = :uri LIMIT 1")
     suspend fun loadByUri(uri: String): PlaybackHistoryEntity?
