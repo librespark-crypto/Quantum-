@@ -78,12 +78,20 @@ dependencies {
     implementation "com.google.android.material:material:1.11.0"
     implementation "androidx.annotation:annotation:1.6.0"
     implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.0"
+    implementation "androidx.lifecycle:lifecycle-runtime-compose:2.8.0"
     implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0"
     implementation "androidx.activity:activity-ktx:1.8.2"
     implementation "androidx.activity:activity-compose:1.8.2"
 
     // --- Coroutines ---
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
+    // --- DataStore Preferences: last-played FAB resume state, no Settings screen ---
+    implementation "androidx.datastore:datastore-preferences:1.1.1"
+
+    // --- Coil: video keyframe thumbnails in the library grid ---
+    implementation "io.coil-kt:coil-compose:2.6.0"
+    implementation "io.coil-kt:coil-video:2.6.0"
 
     // --- Compose (1.6.6 line) + Material 3 (1.2.0) ---
     implementation "androidx.compose.ui:ui:1.6.6"

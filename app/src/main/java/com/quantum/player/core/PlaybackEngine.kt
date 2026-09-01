@@ -160,6 +160,58 @@ interface PlaybackEngine {
 
     /** Release engine resources. */
     suspend fun release()
+
+    // ------------------------------------------------------------------
+    // Direct on-screen player configuration (no Settings screen exists;
+    // every one of these is driven from the HUD chips / bottom sheets).
+    // ------------------------------------------------------------------
+
+    /** Hardware vs software decoding, switched instantly from the HUD HW/SW badge. */
+    val decoderMode: DecoderMode
+
+    /** Flip between hardware and software decoding. Rebuilds the player pipeline. */
+    suspend fun setDecoderMode(mode: DecoderMode)
+
+    /**
+     * Software volume gain applied after decoding, 1.0f = 100%.
+     * Values up to 2.0f (200%) give the "volume boost" the right-side
+     * vertical drag offers beyond the system stream maximum.
+     */
+    val volumeBoost: Float
+
+    /** Set the post-decode gain (clamped to 0f..2f / 0%..200%). */
+    suspend fun setVolumeBoost(gain: Float)
+
+    /**
+     * Android audio session id, used by [AudioEffectsController]
+     * to attach the equalizer / bass boost. -1 before a player exists.
+     */
+    val audioSessionId: Int
+
+    /**
+     * Equalizer / bass boost tuner bound to the current playback session.
+     * Driven directly from the HUD 🎛️ chip bottom sheet.
+     */
+    val audioEffects: AudioEffectsController
+
+    /**
+     * Add an external subtitle file (.srt/.vtt/.ass) to the current media and
+     * select it immediately. Used by the subtitle selector's "Open local file".
+     */
+    suspend fun addExternalSubtitle(uri: String, mimeType: String? = null, language: String? = null)
+}
+
+/**
+ * Decoder pipeline selected by the HUD HW/SW badge.
+ */
+enum class DecoderMode {
+    /** Hardware decoders preferred (default; best battery/performance). */
+    HARDWARE,
+
+    /** Software decoders forced (ffmpeg extension renderers / fallback list). */
+    SOFTWARE;
+
+    val badge: String get() = if (this == HARDWARE) "HW" else "SW"
 }
 
 /**
