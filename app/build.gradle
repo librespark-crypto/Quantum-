@@ -131,3 +131,19 @@ dependencies {
     androidTestImplementation "androidx.compose.ui:ui-test-junit4:1.6.6"
     debugImplementation "androidx.compose.ui:ui-test-manifest:1.6.6"
 }
+
+android {
+    signingConfigs {
+        release {
+            storeFile file(System.getenv("KEYSTORE_PATH") ?: "quantum-release-key.jks")
+            storePassword System.getenv("KEYSTORE_PASSWORD")
+            keyAlias System.getenv("KEY_ALIAS")
+            keyPassword System.getenv("KEY_PASSWORD")
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+        }
+    }
+}
