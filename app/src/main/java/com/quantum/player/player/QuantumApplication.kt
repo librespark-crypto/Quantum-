@@ -33,6 +33,7 @@ class QuantumApplication : Application() {
     }
 
     /** Get the application's Room database instance. */
+    @JvmName("getDatabaseInstance")
     fun getDatabase(): QuantumRoomDatabase = database
 
     override fun onTerminate() {

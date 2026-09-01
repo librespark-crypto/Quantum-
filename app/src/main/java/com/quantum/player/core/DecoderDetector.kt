@@ -50,7 +50,7 @@ object DecoderDetector : DecoderCapabilityChecker {
         ),
         "video/av01" to setOf(
             MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10,
-            MediaCodecInfo.CodecProfileLevel.AV1ProfileMain810
+            0x2000 // AV1ProfileMain810
         )
     )
 
@@ -141,7 +141,9 @@ object DecoderDetector : DecoderCapabilityChecker {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val formats = runCatching { capabilitiesFor(info, mimeType)?.colorFormats }.getOrNull()
             ?: return false
-        return formats.any { it == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420P010 }
+        val P010 = try { MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010 } catch (e: Throwable) { 54 }
+        val YUV420Flexible = try { MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible } catch (e: Throwable) { 2135033992 }
+        return formats.any { it == P010 || it == YUV420Flexible }
     }
 
     private fun supportsTenBit(info: MediaCodecInfo, mimeType: String): Boolean =

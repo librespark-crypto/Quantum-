@@ -294,9 +294,9 @@ private fun Modifier.aspectFit(
         AspectRatioMode.Fill -> this.fillMaxSize()
         AspectRatioMode.Fit, AspectRatioMode.Auto -> {
             if (videoRatio > containerRatio) {
-                this.fillMaxWidth().height(containerWidth / videoRatio)
+                this.fillMaxWidth().height((containerWidth / videoRatio).dp)
             } else {
-                this.height(containerHeight).fillMaxWidth(
+                this.height(containerHeight.dp).fillMaxWidth(
                     (containerHeight * videoRatio) / containerWidth
                 )
             }
