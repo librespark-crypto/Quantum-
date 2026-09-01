@@ -59,7 +59,7 @@ class QuantumPiPActivity : ComponentActivity() {
         return MediaItem(
             id = uri,
             uri = uri,
-            title = intent.getStringExtra(EXTRA_TITLE) ?: uri.substringAfterLast('/')
+            title = intent?.getStringExtra(EXTRA_TITLE) ?: uri.substringAfterLast('/')
         )
     }
 

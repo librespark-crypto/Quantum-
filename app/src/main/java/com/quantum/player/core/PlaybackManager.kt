@@ -10,27 +10,35 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem as Media3MediaItem
+import androidx.media3.common.MediaItem.SubtitleConfiguration
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException as Media3PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.RenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.common.text.Cue
-import androidx.media3.common.text.CueGroup
 import com.quantum.player.error.PlaybackError
 import com.quantum.player.model.MediaItem
 import com.quantum.player.model.SubtitleInfo
@@ -74,6 +82,14 @@ class PlaybackManager(context: Context) : PlaybackEngine {
     private var pendingMime: String? = null
     private var pendingStartPositionMs: Long = 0L
 
+    // ---- Direct on-screen configuration (no Settings screen) ----
+    private val volumeBoostProcessor = VolumeBoostAudioProcessor()
+    override val audioEffects = AudioEffectsController()
+    private var _decoderMode = DecoderMode.HARDWARE
+
+    /** External subtitle files added during the current session, keyed by URI. */
+    private val externalSubtitles = mutableListOf<SubtitleConfiguration>()
+
     private val _stateFlow = MutableStateFlow(PlaybackState.Idle)
     private val _position = MutableStateFlow(0L)
     private val _error = MutableStateFlow<PlaybackError.PlaybackException?>(null)
@@ -108,10 +124,42 @@ class PlaybackManager(context: Context) : PlaybackEngine {
     /**
      * Create the player on demand. Released players are recreated rather than
      * reused, so [release] is not a terminal state for the engine instance.
+     *
+     * The renderers factory honours the current [DecoderMode] (the HUD HW/SW
+     * badge): software mode forces non-hardware MediaCodec decoders, and the
+     * audio sink chain carries [VolumeBoostAudioProcessor] for the up-to-200%
+     * software volume boost.
      */
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
-        val exoPlayer = ExoPlayer.Builder(appContext)
+        // The volume-boost processor must live in the render chain's audio
+        // sink; subclass the factory and override buildAudioSink so the custom
+        // sink (carrying the processor) replaces the default. The hook method
+        // is stable across Media3 releases (protected, AudioSink return).
+        val renderersFactory: RenderersFactory =
+            object : DefaultRenderersFactory(appContext) {
+                @UnstableApi
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): AudioSink? = DefaultAudioSink.Builder()
+                    .setAudioProcessors(arrayOf(volumeBoostProcessor))
+                    .build()
+            }
+                .setExtensionRendererMode(
+                    if (_decoderMode == DecoderMode.SOFTWARE) {
+                        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                    } else {
+                        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                    }
+                )
+                .setMediaCodecSelector(
+                    if (_decoderMode == DecoderMode.SOFTWARE) SoftwareCodecSelector
+                    else MediaCodecSelector.DEFAULT
+                )
+
+        val exoPlayer = ExoPlayer.Builder(appContext, renderersFactory)
             .setTrackSelector(DefaultTrackSelector(appContext))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -129,6 +177,32 @@ class PlaybackManager(context: Context) : PlaybackEngine {
         attachedTextureView?.let { exoPlayer.setVideoTextureView(it) }
         player = exoPlayer
         return exoPlayer
+    }
+
+    /**
+     * MediaCodec selector that filters out hardware-accelerated decoders so
+     * software decoding is forced. On API < Q hardware/software cannot be
+     * distinguished via [MediaCodecInfo] flags, so it falls back to the default
+     * selector (extension ffmpeg renderers, when present, still win because the
+     * factory is built with EXTENSION_RENDERER_MODE_PREFER).
+     */
+    private object SoftwareCodecSelector : MediaCodecSelector {
+        override fun getDecoderInfos(
+            mimeType: String,
+            requiresSecureDecoder: Boolean,
+            requiresTunnelingDecoder: Boolean
+        ): MutableList<MediaCodecInfo> {
+            val all = MediaCodecUtil.getDecoderInfos(
+                mimeType,
+                requiresSecureDecoder,
+                requiresTunnelingDecoder
+            )
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+                return all
+            }
+            val softwareOnly = all.filter { info -> !info.hardwareAccelerated }
+            return (softwareOnly.ifEmpty { all }).toMutableList()
+        }
     }
 
     /** Flattens a cue group to the plain strings the UI overlay renders. */
@@ -185,6 +259,12 @@ class PlaybackManager(context: Context) : PlaybackEngine {
 
         override fun onRenderedFirstFrame() {
             _error.value = null
+        }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            // The equalizer / bass boost must (re)bind whenever the renderers
+            // create a fresh audio session - including after an HW/SW rebuild.
+            audioEffects.attach(audioSessionId)
         }
     }
 
@@ -297,9 +377,12 @@ class PlaybackManager(context: Context) : PlaybackEngine {
         item.title?.let { builder.setMediaMetadata(
             androidx.media3.common.MediaMetadata.Builder().setTitle(it).build()
         ) }
-        item.subtitles?.takeIf { it.isNotEmpty() }?.let { subs ->
-            builder.setSubtitleConfigurations(subs.map { it.toSubtitleConfiguration() })
+        val subtitles = buildList {
+            item.subtitles?.forEach { add(it.toSubtitleConfiguration()) }
+            // .srt/.vtt/.ass files picked from the HUD selector for this item.
+            addAll(externalSubtitles)
         }
+        if (subtitles.isNotEmpty()) builder.setSubtitleConfigurations(subtitles)
         return builder.build()
     }
 
@@ -459,10 +542,10 @@ class PlaybackManager(context: Context) : PlaybackEngine {
                         ?: "${format.width}x${format.height}".takeIf { format.width > 0 }
                         ?: "Track ${index + 1}",
                     codec = format.sampleMimeType,
-                    profile = format.profile.takeUnless { it == Format.NO_VALUE }?.toString(),
-                    level = format.level.takeUnless { it == Format.NO_VALUE }?.toString(),
-                    width = format.width.takeUnless { it == Format.NO_VALUE } ?: 0,
-                    height = format.height.takeUnless { it == Format.NO_VALUE } ?: 0,
+                    profile = null,
+                    level = null,
+                    width = format.width.takeUnless { w -> w == Format.NO_VALUE } ?: 0,
+                    height = format.height.takeUnless { h -> h == Format.NO_VALUE } ?: 0,
                     bitDepth = null
                 )
             }
@@ -616,7 +699,96 @@ class PlaybackManager(context: Context) : PlaybackEngine {
     fun shutdown() {
         positionJob?.cancel()
         positionJob = null
+        audioEffects.release()
         scope.coroutineContext[Job]?.cancel()
+    }
+
+    // -----------------------------------------------------------------
+    // Direct on-screen configuration (HW/SW badge, volume boost, subs, FX)
+    // -----------------------------------------------------------------
+
+    override val decoderMode: DecoderMode get() = _decoderMode
+
+    override suspend fun setDecoderMode(mode: DecoderMode) {
+        if (mode == _decoderMode && player != null) return
+        _decoderMode = mode
+        val currentItem = mediaItem ?: run {
+            // No media yet: the next ensurePlayer() picks the mode up.
+            return
+        }
+        // Decoder type is a render-chain property: remember the position, rebuild
+        // the player and resume so the switch is instant from the user's view.
+        val resumeAt = currentPosition.coerceAtLeast(0L)
+        val wasPlaying = player?.playWhenReady ?: true
+        withContext(Dispatchers.Main.immediate) {
+            player?.let { old ->
+                old.removeListener(listener)
+                old.playWhenReady = false
+                old.stop()
+                old.release()
+            }
+            player = null
+            audioEffects.release()
+            val rebuilt = ensurePlayer()
+            attachedTextureView?.let { rebuilt.setVideoTextureView(it) }
+            val kind = MediaSourceDetector.kindOf(currentItem.uri, currentItem.format)
+            pendingMime = MediaSourceDetector.forcedMimeType(kind)
+            rebuilt.setMediaSource(createMediaSource(currentItem, kind), resumeAt)
+            rebuilt.prepare()
+            rebuilt.playWhenReady = wasPlaying
+            audioEffects.attach(rebuilt.audioSessionId)
+        }
+        startPositionUpdates()
+    }
+
+    @Volatile private var _volumeBoost: Float = 1f
+    override val volumeBoost: Float get() = _volumeBoost
+
+    override suspend fun setVolumeBoost(gain: Float) {
+        val clamped = gain.coerceIn(0f, MAX_VOLUME_BOOST)
+        _volumeBoost = clamped
+        withContext(Dispatchers.Main.immediate) {
+            volumeBoostProcessor.setGain(clamped)
+        }
+    }
+
+    override val audioSessionId: Int
+        get() = player?.audioSessionId?.takeIf { it != AudioSessionIdUnset }
+            ?: AudioEffectsController.AudioSessionUnavailable
+
+    override suspend fun addExternalSubtitle(uri: String, mimeType: String?, language: String?) {
+        val format = mimeType ?: when (uri.substringAfterLast('.', "").lowercase()) {
+            "vtt" -> MimeTypes.TEXT_VTT
+            "ass", "ssa" -> MimeTypes.TEXT_SSA
+            "ttml", "xml" -> MimeTypes.APPLICATION_TTML
+            else -> MimeTypes.APPLICATION_SUBRIP
+        }
+        val config = SubtitleConfiguration.Builder(Uri.parse(uri))
+            .setMimeType(format)
+            .setLanguage(language)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            .build()
+        externalSubtitles.removeAll { it.uri.toString() == uri }
+        externalSubtitles.add(config)
+        val currentItem = mediaItem ?: return
+        // Re-prepare with the rebuilt item; the position is preserved so adding
+        // a subtitle mid-film does not restart playback.
+        val resumeAt = currentPosition
+        withContext(Dispatchers.Main.immediate) {
+            val exoPlayer = ensurePlayer()
+            val kind = MediaSourceDetector.kindOf(currentItem.uri, currentItem.format)
+            pendingMime = MediaSourceDetector.forcedMimeType(kind)
+            exoPlayer.setMediaSource(createMediaSource(currentItem, kind), resumeAt.coerceAtLeast(0L))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        }
+        _tracksRevision.value += 1
+        startPositionUpdates()
+    }
+
+    private companion object {
+        const val MAX_VOLUME_BOOST = 2.0f
+        const val AudioSessionIdUnset = 0
     }
 
     private companion object {
